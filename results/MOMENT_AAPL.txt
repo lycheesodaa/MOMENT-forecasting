@@ -1,0 +1,15 @@
+[DEBUG]: Forecasting for horizon length 96...
+Horizon: 96 Pre-eval | Vali Loss: 1.7146974 Vali MAE Loss: 0.9564786 Test Loss: 14.5329541 MAE Loss: 2.9282883
+Epoch 1: Train loss: 0.198
+Horizon: 96 LP-eval | Vali Loss: 1.2546339 Vali MAE Loss: 0.8955873 Test Loss: 15.8184231 MAE Loss: 2.5346325
+
+[DEBUG]: Forecasting for horizon length 192...
+Horizon: 192 Pre-eval | Vali Loss: 1.8590906 Vali MAE Loss: 0.9866625 Test Loss: 17.1608112 MAE Loss: 3.3048813
+Epoch 1: Train loss: 0.219
+Horizon: 192 LP-eval | Vali Loss: 1.6502579 Vali MAE Loss: 1.0271657 Test Loss: 20.3404868 MAE Loss: 3.0418116
+
+[DEBUG]: Forecasting for horizon length 356...
+Horizon: 356 Pre-eval | Vali Loss: 2.4404618 Vali MAE Loss: 1.2002147 Test Loss: 20.7565521 MAE Loss: 3.8005386
+Epoch 1: Train loss: 0.275
+Horizon: 356 LP-eval | Vali Loss: 1.8362858 Vali MAE Loss: 1.1151913 Test Loss: 25.6129683 MAE Loss: 3.7109090
+

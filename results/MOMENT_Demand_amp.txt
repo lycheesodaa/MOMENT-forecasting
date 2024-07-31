@@ -1,0 +1,36 @@
+[DEBUG]: Forecasting for horizon length 96...
+Detected 2 GPUs. Initialising Multi-GPU configuration...
+Horizon: 96 Pre-eval | Vali Loss: 0.8252117 Vali MAE Loss: 0.7849236 Test Loss: 0.8839713 MAE Loss: 0.8133537
+
+Horizon: 96 Pre-eval (NEMS forecasted) | Vali Loss: 1.1233686 Vali MAE Loss: 0.8637107 Test Loss: 2.9958523 MAE Loss: 1.3500784
+
+Epoch 1: Train loss: 0.231
+
+Horizon: 96 LP-eval | Vali Loss: 0.0817907 Vali MAE Loss: 0.2157746 Test Loss: 0.0855379 MAE Loss: 0.2204102
+
+Horizon: 96 LP-eval (NEMS forecasted) | Vali Loss: 1.1234519 Vali MAE Loss: 0.8637472 Test Loss: 2.9958523 MAE Loss: 1.3500784
+
+[DEBUG]: Forecasting for horizon length 192...
+Detected 2 GPUs. Initialising Multi-GPU configuration...
+Horizon: 192 Pre-eval | Vali Loss: 0.8173893 Vali MAE Loss: 0.7806998 Test Loss: 0.8747712 MAE Loss: 0.8090196
+
+Horizon: 192 Pre-eval (NEMS forecasted) | Vali Loss: 1.1226735 Vali MAE Loss: 0.8630842 Test Loss: 2.9987255 MAE Loss: 1.3506625
+
+Epoch 1: Train loss: 0.239
+
+Horizon: 192 LP-eval | Vali Loss: 0.0901068 Vali MAE Loss: 0.2282630 Test Loss: 0.0916356 MAE Loss: 0.2305895
+
+Horizon: 192 LP-eval (NEMS forecasted) | Vali Loss: 1.1225574 Vali MAE Loss: 0.8630402 Test Loss: 2.9987255 MAE Loss: 1.3506625
+
+[DEBUG]: Forecasting for horizon length 356...
+Detected 2 GPUs. Initialising Multi-GPU configuration...
+Horizon: 356 Pre-eval | Vali Loss: 0.8291964 Vali MAE Loss: 0.7850023 Test Loss: 0.8862542 MAE Loss: 0.8134372
+
+Horizon: 356 Pre-eval (NEMS forecasted) | Vali Loss: 1.1237439 Vali MAE Loss: 0.8630006 Test Loss: 3.0074966 MAE Loss: 1.3521801
+
+Epoch 1: Train loss: 0.245
+
+Horizon: 356 LP-eval | Vali Loss: 0.1023188 Vali MAE Loss: 0.2434578 Test Loss: 0.0974304 MAE Loss: 0.2395531
+
+Horizon: 356 LP-eval (NEMS forecasted) | Vali Loss: 1.1238670 Vali MAE Loss: 0.8630373 Test Loss: 3.0074966 MAE Loss: 1.3521801
+
