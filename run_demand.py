@@ -1,4 +1,6 @@
 import argparse
+from datetime import datetime
+
 from momentfm import MOMENTPipeline
 from torch.nn import DataParallel
 from torch.optim.lr_scheduler import OneCycleLR
@@ -10,6 +12,7 @@ import torch
 import numpy as np
 import os
 import time
+import pandas as pd
 
 parser = argparse.ArgumentParser(description='MOMENT')
 
@@ -24,8 +27,8 @@ parser.add_argument('--task_name', type=str, required=True, default='long_term_f
 parser.add_argument('--is_training', type=int, required=False, default=0, help='status')
 parser.add_argument('--model_id', type=str, required=True, default='test', help='model id')
 parser.add_argument('--model_comment', type=str, required=True, default='none', help='prefix when saving test results')
-parser.add_argument('--model', type=str, required=False, default='Autoformer',
-                    help='model name, options: [Autoformer, DLinear]')
+parser.add_argument('--model', type=str, required=False, default='MOMENT',
+                    help='model name, options: [MOMENT, LSTM]')
 parser.add_argument('--seed', type=int, default=2021, help='random seed')
 
 # data loader
@@ -36,7 +39,7 @@ parser.add_argument('--features', type=str, default='M',
                     help='forecasting task, options:[M, S, MS]; '
                          'M:multivariate predict multivariate, S: univariate predict univariate, '
                          'MS:multivariate predict univariate')
-parser.add_argument('--target', type=str, default='OT', help='target feature in S or MS task')
+parser.add_argument('--target', type=str, default='actual', help='target feature in S or MS task')
 parser.add_argument('--loader', type=str, default='modal', help='dataset type')
 parser.add_argument('--freq', type=str, default='d',
                     help='freq for time features encoding, '
@@ -98,10 +101,9 @@ mae_metric = torch.nn.L1Loss().to(device)
 
 target_index = 0  # this is the index of the actual target feature
 
-setting = '{}_{}_{}_{}_ft{}_sl{}_ll{}_pl{}_{}'.format(
+setting = '{}_{}_{}_ft{}_sl{}_ll{}_pl{}_{}'.format(
         args.task_name,
         args.model_id,
-        args.model,
         args.data,
         args.features,
         args.seq_len,
@@ -112,16 +114,24 @@ setting = '{}_{}_{}_{}_ft{}_sl{}_ll{}_pl{}_{}'.format(
 path = os.path.join(args.checkpoints,
                     setting + '-' + args.model_comment)  # unique checkpoint saving path
 
+if not os.path.exists(path):
+    os.mkdir(path)
+
+is_zero_shot_short_horizon = args.pred_len <= 12
 
 '''
 For the demand forecasting task, the forecast data from NEMS should also be returned by the data loader.
 Returning the data through the data loader helps to provide consistent evaluations of average loss across tests.
 '''
-def val_or_test(loader):
+def val_or_test(loader, output_csv=False, stage=None):
     total_loss = []
     total_mae_loss = []
     total_forecast_loss = []
     total_forecast_mae_loss = []
+    all_preds = []
+    all_true = []
+    dates = []
+    all_nems_forecasts = []
 
     for (batch_x, batch_y, batch_x_mark, batch_y_mark,
          nems_forecast_x, nems_forecast_y, input_mask) in tqdm(loader, total=len(loader)):
@@ -157,6 +167,48 @@ def val_or_test(loader):
         total_forecast_loss.append(loss.item())
         total_forecast_mae_loss.append(mae_loss.item())
 
+        if output_csv:
+            all_preds.append(pred)
+            all_true.append(true)
+            dates.append(batch_y_mark.detach()[:, :, -args.pred_len:].permute(0, 2, 1).contiguous().view(-1, 6))
+            all_nems_forecasts.append(forecasts)
+
+    if output_csv:
+        # Concatenate all predictions and indices
+        all_preds = torch.cat(all_preds)
+        all_true = torch.cat(all_true)
+        dates = torch.cat(dates)
+        all_nems_forecasts = torch.cat(all_nems_forecasts)
+
+        # shape (12176, 96)
+        all_preds = all_preds.cpu().float().numpy()
+        all_true = all_true.cpu().float().numpy()
+        dates = dates.cpu().numpy()
+        all_nems_forecasts = all_nems_forecasts.cpu().float().numpy()
+
+        # inverse the scaling
+        all_preds = vali_data.target_inverse_transform(all_preds.reshape(-1, 1)).reshape(-1)
+        all_true = vali_data.target_inverse_transform(all_true.reshape(-1, 1)).reshape(-1)
+        all_nems_forecasts = vali_data.nems_inverse_transform(all_nems_forecasts.reshape(-1, 1)).reshape(-1)
+
+        dates = pd.DataFrame(dates, columns=['year', 'month', 'day', 'weekday', 'hour', 'minute'], dtype=int)
+        df = pd.DataFrame({
+            'pred': all_preds,
+            'true': all_true,
+            'nems_forecast': all_nems_forecasts
+        })
+        df = pd.concat([dates, df], axis=1)
+        df['date'] = df.apply(create_datetime, axis=1)
+        df.drop(columns=['year', 'month', 'day', 'weekday', 'hour', 'minute'], inplace=True)
+        df.to_csv(f'results/data/MOMENT_Demand_pl{args.pred_len}_{stage}_predictions.csv')
+
+        # loss calculation is not as accurate here, calculate again from raw data alone
+        data = pd.DataFrame({
+            'mse_loss_scaled': total_loss,
+            'mae_loss': total_mae_loss
+        })
+        data.to_csv(f'results/data/MOMENT_Demand_pl{args.pred_len}_{stage}_losses.csv')
+
     avg_loss = np.average(total_loss)
     avg_mae_loss = np.average(total_mae_loss)
 
@@ -166,16 +218,30 @@ def val_or_test(loader):
     return avg_loss, avg_mae_loss, avg_nems_forecast_loss, avg_nems_forecast_mae_loss
 
 
+def create_datetime(row):
+    row = row.astype(int)
+    return datetime(row['year'], row['month'], row['day'], row['hour'], row['minute'])
+
+
 # Forecasting task
 print(f'[DEBUG]: Forecasting for horizon length {args.pred_len}...')
 
-model = MOMENTPipeline.from_pretrained(
-    "AutonLab/MOMENT-1-large",
-    model_kwargs={
-        'task_name': 'forecasting',
-        'forecast_horizon': args.pred_len
-    },
-)
+if is_zero_shot_short_horizon:
+    model = MOMENTPipeline.from_pretrained(
+        "AutonLab/MOMENT-1-large",
+        model_kwargs={
+            'task_name': 'short-horizon-forecasting',
+            'forecast_horizon': args.pred_len
+        },
+    )
+else:
+    model = MOMENTPipeline.from_pretrained(
+        "AutonLab/MOMENT-1-large",
+        model_kwargs={
+            'task_name': 'long-horizon-forecasting',
+            'forecast_horizon': args.pred_len
+        },
+    )
 model.init()
 if torch.cuda.device_count() > 1:
     print("Detected", torch.cuda.device_count(), "GPUs. Initialising Multi-GPU configuration...")
@@ -192,15 +258,19 @@ with torch.no_grad():
     # validation
     vali_loss, vali_mae_loss, vali_forecast_loss, vali_forecast_mae_loss = val_or_test(vali_loader)
     # test
-    test_loss, test_mae_loss, test_forecast_loss, test_forecast_mae_loss = val_or_test(test_loader)
+    test_loss, test_mae_loss, test_forecast_loss, test_forecast_mae_loss = val_or_test(test_loader, True, 'base')
 model.train()
 
 print(
-    "Horizon: {0} Pre-eval | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}\n".format(
+    "Horizon: {0} Pre-eval | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}".format(
         args.pred_len, vali_loss, vali_mae_loss, test_loss, test_mae_loss))
 print(
-    "Horizon: {0} Pre-eval (NEMS forecasted) | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}\n".format(
+    "Horizon: {0} NEMS forecasted | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}".format(
         args.pred_len, vali_forecast_loss, vali_forecast_mae_loss, test_forecast_loss, test_forecast_mae_loss))
+
+if is_zero_shot_short_horizon:
+    print('Zero shot short horizon forecasting, ending inference...')
+    exit()
 
 # ---- Training ----
 scaler = torch.cuda.amp.GradScaler()
@@ -221,6 +291,8 @@ for (batch_x, batch_y, batch_x_mark, batch_y_mark,
     batch_y = batch_y.float().to(device)
     input_mask = input_mask.float().to(device)
 
+    optimizer.zero_grad(set_to_none=True)
+
     if args.use_amp:
         with torch.cuda.amp.autocast():
             output = model(batch_x, input_mask)
@@ -237,13 +309,13 @@ for (batch_x, batch_y, batch_x_mark, batch_y_mark,
 
             scaler.step(optimizer)
             scaler.update()
-            optimizer.zero_grad(set_to_none=True)
     else:
         output = model(batch_x, input_mask)
 
-        train_loss = criterion(output, batch_y)
+        train_loss = criterion(output[:, target_index, :], batch_y[:, target_index, :])
 
         train_loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
         optimizer.step()
 
     losses.append(train_loss.item())
@@ -261,14 +333,14 @@ with torch.no_grad():
     # validation
     vali_loss, vali_mae_loss, vali_forecast_loss, vali_forecast_mae_loss = val_or_test(vali_loader)
     # test
-    test_loss, test_mae_loss, test_forecast_loss, test_forecast_mae_loss = val_or_test(test_loader)
+    test_loss, test_mae_loss, test_forecast_loss, test_forecast_mae_loss = val_or_test(test_loader, True, 'post-lp')
 model.train()
 
 print(
-    "Horizon: {0} LP-eval | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}\n".format(
+    "Horizon: {0} LP-eval | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}".format(
         args.pred_len, vali_loss, vali_mae_loss, test_loss, test_mae_loss))
 print(
-    "Horizon: {0} LP-eval (NEMS forecasted) | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}\n".format(
+    "Horizon: {0} NEMS forecasted | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}\n".format(
         args.pred_len, vali_forecast_loss, vali_forecast_mae_loss, test_forecast_loss, test_forecast_mae_loss))
 
 torch.save(model.state_dict(), str(path) + '/' + 'checkpoint')

@@ -231,3 +231,18 @@ def load_content(args):
     with open('./dataset/prompt_bank/{0}.txt'.format(file), 'r') as f:
         content = f.read()
     return content
+
+
+def MAPELoss(pred, true):
+    """
+    Calculate Mean Absolute Percentage Error (MAPE)
+
+    Args:
+    pred (torch.Tensor): Predicted values
+    true (torch.Tensor): True values
+
+    Returns:
+    torch.Tensor: MAPE value
+    """
+    epsilon = 1e-8  # Small constant to avoid division by zero
+    return torch.mean(torch.abs((true - pred) / (true + epsilon))) * 100

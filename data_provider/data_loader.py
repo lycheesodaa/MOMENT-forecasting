@@ -136,7 +136,7 @@ class Dataset_Demand(Dataset):
         self.features = features
         self.target = target
         self.scale = scale
-        self.timeenc = timeenc
+        self.timeenc = 0
         self.freq = freq
 
         self.root_path = root_path
@@ -148,6 +148,8 @@ class Dataset_Demand(Dataset):
 
     def __read_data__(self):
         self.scaler = StandardScaler()
+        self.target_scaler = StandardScaler()
+        self.nems_scaler = StandardScaler()
         df_raw = pd.read_csv(os.path.join(self.root_path,
                                           self.data_path))
 
@@ -187,6 +189,8 @@ class Dataset_Demand(Dataset):
 
         if self.scale:
             train_data = df_data[border1s[0]:border2s[0]]
+            self.target_scaler.fit(train_data[self.target].values.reshape(-1, 1))
+            self.nems_scaler.fit(train_data['forecast'].values.reshape(-1, 1))
             self.scaler.fit(train_data.values)
             data = self.scaler.transform(df_data.values)
         else:
@@ -199,13 +203,14 @@ class Dataset_Demand(Dataset):
         df_stamp = df_raw[['datetime']][border1:border2]
         df_stamp['datetime'] = pd.to_datetime(df_stamp['datetime'])
         if self.timeenc == 0:
-            df_stamp['month'] = df_stamp.date.apply(lambda row: row.month, 1)
-            df_stamp['day'] = df_stamp.date.apply(lambda row: row.day, 1)
-            df_stamp['weekday'] = df_stamp.date.apply(lambda row: row.weekday(), 1)
-            df_stamp['hour'] = df_stamp.date.apply(lambda row: row.hour, 1)
-            df_stamp['minute'] = df_stamp.date.apply(lambda row: row.minute, 1)
+            df_stamp['year'] = df_stamp.datetime.apply(lambda row: row.year, 1)
+            df_stamp['month'] = df_stamp.datetime.apply(lambda row: row.month, 1)
+            df_stamp['day'] = df_stamp.datetime.apply(lambda row: row.day, 1)
+            df_stamp['weekday'] = df_stamp.datetime.apply(lambda row: row.weekday(), 1)
+            df_stamp['hour'] = df_stamp.datetime.apply(lambda row: row.hour, 1)
+            df_stamp['minute'] = df_stamp.datetime.apply(lambda row: row.minute, 1)
             df_stamp['minute'] = df_stamp.minute.map(lambda x: x // 15)
-            data_stamp = df_stamp.drop(['datetime'], 1).values
+            data_stamp = df_stamp.drop(columns=['datetime']).values
         elif self.timeenc == 1:
             data_stamp = time_features(pd.to_datetime(df_stamp['datetime'].values), freq=self.freq)
             data_stamp = data_stamp.transpose(1, 0)
@@ -238,3 +243,5 @@ class Dataset_Demand(Dataset):
     def inverse_transform(self, data):
         return self.scaler.inverse_transform(data)
 
+    def target_inverse_transform(self, data):
+        return self.target_scaler.inverse_transform(data)
