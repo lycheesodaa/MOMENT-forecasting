@@ -246,3 +246,53 @@ def MAPELoss(pred, true):
     """
     epsilon = 1e-8  # Small constant to avoid division by zero
     return torch.mean(torch.abs((true - pred) / (true + epsilon))) * 100
+
+
+def calculate_mse(y_true: list, y_pred: list) -> float:
+    """
+    Calculate the Mean Squared Error (MSE) between true and predicted values.
+
+    Args:
+    y_true: Array of true values
+    y_pred: Array of predicted values
+
+    Returns:
+    float: The calculated MSE
+
+    Raises:
+    ValueError: If the input arrays have different shapes
+    """
+    y_true = np.array(y_true)
+    y_pred = np.array(y_pred)
+
+    if y_true.shape != y_pred.shape:
+        raise ValueError("True and predicted arrays must have the same shape")
+
+    return np.mean((y_true - y_pred) ** 2)
+
+
+def calculate_mape(y_true: list, y_pred: list) -> float:
+    """
+    Calculate the Mean Absolute Percentage Error (MAPE) between true and predicted values.
+
+    Args:
+    y_true: Array of true values
+    y_pred: Array of predicted values
+
+    Returns:
+    float: The calculated MAPE
+
+    Raises:
+    ValueError: If the input arrays have different shapes
+    ZeroDivisionError: If any true value is zero
+    """
+    y_true = np.array(y_true)
+    y_pred = np.array(y_pred)
+
+    if y_true.shape != y_pred.shape:
+        raise ValueError("True and predicted arrays must have the same shape")
+
+    if np.any(y_true == 0):
+        raise ZeroDivisionError("MAPE is undefined when true values contain zeros")
+
+    return np.mean(np.abs((y_true - y_pred) / y_true)) * 100

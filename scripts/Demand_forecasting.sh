@@ -1,6 +1,6 @@
 comment='MOMENT-Demand'
 
-for pred_len in 1 12 72
+for pred_len in 1 12
 #for pred_len in 96 192 356
 do
   python run_demand.py \

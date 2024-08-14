@@ -226,22 +226,22 @@ def create_datetime(row):
 # Forecasting task
 print(f'[DEBUG]: Forecasting for horizon length {args.pred_len}...')
 
-if is_zero_shot_short_horizon:
-    model = MOMENTPipeline.from_pretrained(
-        "AutonLab/MOMENT-1-large",
-        model_kwargs={
-            'task_name': 'short-horizon-forecasting',
-            'forecast_horizon': args.pred_len
-        },
-    )
-else:
-    model = MOMENTPipeline.from_pretrained(
-        "AutonLab/MOMENT-1-large",
-        model_kwargs={
-            'task_name': 'long-horizon-forecasting',
-            'forecast_horizon': args.pred_len
-        },
-    )
+# if is_zero_shot_short_horizon:
+#     model = MOMENTPipeline.from_pretrained(
+#         "AutonLab/MOMENT-1-large",
+#         model_kwargs={
+#             'task_name': 'short-horizon-forecasting',
+#             'forecast_horizon': args.pred_len
+#         },
+#     )
+# else:
+model = MOMENTPipeline.from_pretrained(
+    "AutonLab/MOMENT-1-large",
+    model_kwargs={
+        'task_name': 'long-horizon-forecasting',
+        'forecast_horizon': args.pred_len
+    },
+)
 model.init()
 if torch.cuda.device_count() > 1:
     print("Detected", torch.cuda.device_count(), "GPUs. Initialising Multi-GPU configuration...")
@@ -268,9 +268,9 @@ print(
     "Horizon: {0} NEMS forecasted | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}".format(
         args.pred_len, vali_forecast_loss, vali_forecast_mae_loss, test_forecast_loss, test_forecast_mae_loss))
 
-if is_zero_shot_short_horizon:
-    print('Zero shot short horizon forecasting, ending inference...')
-    exit()
+# if is_zero_shot_short_horizon:
+#     print('Zero shot short horizon forecasting, ending inference...')
+#     exit()
 
 # ---- Training ----
 scaler = torch.cuda.amp.GradScaler()
@@ -285,6 +285,7 @@ scheduler = OneCycleLR(optimizer, max_lr=max_lr, total_steps=total_steps, pct_st
 max_norm = 5.0
 
 losses = []
+start = time.time()
 for (batch_x, batch_y, batch_x_mark, batch_y_mark,
      nems_forecast_x, nems_forecast_y, input_mask) in tqdm(train_loader, total=len(train_loader)):
     batch_x = batch_x.float().to(device)
@@ -320,9 +321,12 @@ for (batch_x, batch_y, batch_x_mark, batch_y_mark,
 
     losses.append(train_loss.item())
 
+elapsed = time.time() - start
+
 losses = np.array(losses)
 average_loss = np.average(losses)
 print(f"Epoch 1: Train loss: {average_loss:.3f}\n")
+print(f'Time elapsed: {elapsed}')
 
 # step the learning rate scheduler
 scheduler.step()

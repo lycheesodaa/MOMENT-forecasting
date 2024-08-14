@@ -197,7 +197,7 @@ class Dataset_Demand(Dataset):
             data = df_data.values
 
         # extract the forecast column AFTER scaling
-        self.nems_forecast = data[:, 2]
+        self.nems_forecast = data[border1:border2, 2]
         data = np.delete(data, 2, axis=1)
 
         df_stamp = df_raw[['datetime']][border1:border2]
@@ -245,3 +245,8 @@ class Dataset_Demand(Dataset):
 
     def target_inverse_transform(self, data):
         return self.target_scaler.inverse_transform(data)
+
+    def nems_inverse_transform(self, data):
+        # we need to original values, so this would be incorrect since it was fit on only train data
+        # ignore for now, and replace with post-processing
+        return self.nems_scaler.inverse_transform(data)
