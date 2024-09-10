@@ -93,9 +93,11 @@ parser.add_argument('--use_amp', action='store_true', help='use automatic mixed 
 parser.add_argument('--llm_layers', type=int, default=6)
 parser.add_argument('--percent', type=int, default=100)
 
+parser.add_argument('--results_path', type=str, default='./results/data/')
+
 args = parser.parse_args()
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# device = torch.device('cuda:1')
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device('cuda:1')
 criterion = torch.nn.MSELoss().to(device)
 mae_metric = torch.nn.L1Loss().to(device)
 
@@ -116,8 +118,6 @@ path = os.path.join(args.checkpoints,
 
 if not os.path.exists(path):
     os.mkdir(path)
-
-is_zero_shot_short_horizon = args.pred_len <= 12
 
 '''
 For the demand forecasting task, the forecast data from NEMS should also be returned by the data loader.
@@ -200,14 +200,14 @@ def val_or_test(loader, output_csv=False, stage=None):
         df = pd.concat([dates, df], axis=1)
         df['date'] = df.apply(create_datetime, axis=1)
         df.drop(columns=['year', 'month', 'day', 'weekday', 'hour', 'minute'], inplace=True)
-        df.to_csv(f'results/data/MOMENT_Demand_pl{args.pred_len}_{stage}_predictions.csv')
+        df.to_csv(args.results_path + f'MOMENT_Demand_pl{args.pred_len}_{stage}_predictions.csv')
 
-        # loss calculation is not as accurate here, calculate again from raw data alone
-        data = pd.DataFrame({
-            'mse_loss_scaled': total_loss,
-            'mae_loss': total_mae_loss
-        })
-        data.to_csv(f'results/data/MOMENT_Demand_pl{args.pred_len}_{stage}_losses.csv')
+        # # loss calculation is not as accurate here, calculate again from raw data alone
+        # data = pd.DataFrame({
+        #     'mse_loss_scaled': total_loss,
+        #     'mae_loss': total_mae_loss
+        # })
+        # data.to_csv(args.results_path + f'MOMENT_Demand_pl{args.pred_len}_{stage}_losses.csv')
 
     avg_loss = np.average(total_loss)
     avg_mae_loss = np.average(total_mae_loss)
@@ -226,26 +226,27 @@ def create_datetime(row):
 # Forecasting task
 print(f'[DEBUG]: Forecasting for horizon length {args.pred_len}...')
 
-# if is_zero_shot_short_horizon:
-#     model = MOMENTPipeline.from_pretrained(
-#         "AutonLab/MOMENT-1-large",
-#         model_kwargs={
-#             'task_name': 'short-horizon-forecasting',
-#             'forecast_horizon': args.pred_len
-#         },
-#     )
-# else:
-model = MOMENTPipeline.from_pretrained(
-    "AutonLab/MOMENT-1-large",
-    model_kwargs={
-        'task_name': 'long-horizon-forecasting',
-        'forecast_horizon': args.pred_len
-    },
-)
+# short horizon performance is not good
+if args.task_name == 'short-term-forecast':
+    model = MOMENTPipeline.from_pretrained(
+        "AutonLab/MOMENT-1-large",
+        model_kwargs={
+            'task_name': 'short-horizon-forecasting',
+            'forecast_horizon': args.pred_len
+        },
+    )
+else:
+    model = MOMENTPipeline.from_pretrained(
+        "AutonLab/MOMENT-1-large",
+        model_kwargs={
+            'task_name': 'long-horizon-forecasting',
+            'forecast_horizon': args.pred_len
+        },
+    )
 model.init()
-if torch.cuda.device_count() > 1:
-    print("Detected", torch.cuda.device_count(), "GPUs. Initialising Multi-GPU configuration...")
-    model = DataParallel(model)
+# if torch.cuda.device_count() > 1:
+#     print("Detected", torch.cuda.device_count(), "GPUs. Initialising Multi-GPU configuration...")
+#     model = DataParallel(model)
 model.to(device)
 
 train_data, train_loader = data_provider(args, 'train')
@@ -260,6 +261,9 @@ with torch.no_grad():
     # test
     test_loss, test_mae_loss, test_forecast_loss, test_forecast_mae_loss = val_or_test(test_loader, True, 'base')
 model.train()
+
+if args.task_name == 'short_term_forecast':
+    exit()
 
 print(
     "Horizon: {0} Pre-eval | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}".format(

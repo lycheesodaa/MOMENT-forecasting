@@ -5,10 +5,10 @@ for pred_len in 1 12 72
 #for pred_len in 96 192 356
 do
   python run_demand.py \
-    --task_name short-term-forecast \
+    --task_name long-term-forecast \
     --root_path ./data/ \
-    --data_path demand_data_all_cleaned.csv \
-    --results_path ./results/data/short-horizon-forecasting/ \
+    --data_path demand_data_all_nsw_numerical.csv \
+    --results_path ./results/data_aus/ \
     --model_id MOMENT \
     --data Demand \
     --features MS \
