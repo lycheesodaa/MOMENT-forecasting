@@ -119,26 +119,16 @@ path = os.path.join(args.checkpoints,
 if not os.path.exists(path):
     os.mkdir(path)
 
-'''
-For the demand forecasting task, the forecast data from NEMS should also be returned by the data loader.
-Returning the data through the data loader helps to provide consistent evaluations of average loss across tests.
-'''
 def val_or_test(loader, output_csv=False, stage=None):
     total_loss = []
     total_mae_loss = []
-    total_forecast_loss = []
-    total_forecast_mae_loss = []
     all_preds = []
     all_true = []
     dates = []
-    all_nems_forecasts = []
 
-    for (batch_x, batch_y, batch_x_mark, batch_y_mark,
-         nems_forecast_x, nems_forecast_y, input_mask) in tqdm(loader, total=len(loader)):
+    for (batch_x, batch_y, batch_x_mark, batch_y_mark, input_mask) in tqdm(loader, total=len(loader)):
         batch_x = batch_x.float().to(device)
         batch_y = batch_y.float().to(device)
-        nems_forecast_x = nems_forecast_x.to(device)
-        nems_forecast_y = nems_forecast_y.to(device)
         input_mask = input_mask.to(device)
 
         if args.use_amp:
@@ -157,45 +147,30 @@ def val_or_test(loader, output_csv=False, stage=None):
         total_loss.append(loss.item())
         total_mae_loss.append(mae_loss.item())
 
-
-        # get the loss values of NEMS' forecasts (this is only one column)
-        forecasts = nems_forecast_y.detach()
-
-        loss = criterion(forecasts, true)
-        mae_loss = mae_metric(forecasts, true)
-
-        total_forecast_loss.append(loss.item())
-        total_forecast_mae_loss.append(mae_loss.item())
-
         if output_csv:
             all_preds.append(pred)
             all_true.append(true)
             dates.append(batch_y_mark.detach()[:, :, -args.pred_len:].permute(0, 2, 1).contiguous().view(-1, 6))
-            all_nems_forecasts.append(forecasts)
 
     if output_csv:
         # Concatenate all predictions and indices
         all_preds = torch.cat(all_preds)
         all_true = torch.cat(all_true)
         dates = torch.cat(dates)
-        all_nems_forecasts = torch.cat(all_nems_forecasts)
 
         # shape (12176, 96)
         all_preds = all_preds.cpu().float().numpy()
         all_true = all_true.cpu().float().numpy()
         dates = dates.cpu().numpy()
-        all_nems_forecasts = all_nems_forecasts.cpu().float().numpy()
 
         # inverse the scaling
         all_preds = vali_data.target_inverse_transform(all_preds.reshape(-1, 1)).reshape(-1)
         all_true = vali_data.target_inverse_transform(all_true.reshape(-1, 1)).reshape(-1)
-        all_nems_forecasts = vali_data.nems_inverse_transform(all_nems_forecasts.reshape(-1, 1)).reshape(-1)
 
         dates = pd.DataFrame(dates, columns=['year', 'month', 'day', 'weekday', 'hour', 'minute'], dtype=int)
         df = pd.DataFrame({
             'pred': all_preds,
             'true': all_true,
-            'nems_forecast': all_nems_forecasts
         })
         df = pd.concat([dates, df], axis=1)
         df['date'] = df.apply(create_datetime, axis=1)
@@ -212,10 +187,7 @@ def val_or_test(loader, output_csv=False, stage=None):
     avg_loss = np.average(total_loss)
     avg_mae_loss = np.average(total_mae_loss)
 
-    avg_nems_forecast_loss = np.average(total_forecast_loss)
-    avg_nems_forecast_mae_loss = np.average(total_forecast_mae_loss)
-
-    return avg_loss, avg_mae_loss, avg_nems_forecast_loss, avg_nems_forecast_mae_loss
+    return avg_loss, avg_mae_loss
 
 
 def create_datetime(row):
@@ -253,30 +225,27 @@ train_data, train_loader = data_provider(args, 'train')
 vali_data, vali_loader = data_provider(args, 'val')
 test_data, test_loader = data_provider(args, 'test')
 
+
 # Pre-evaluation before training
 model.eval()
 with torch.no_grad():
     # validation
-    vali_loss, vali_mae_loss, vali_forecast_loss, vali_forecast_mae_loss = val_or_test(vali_loader)
+    vali_loss, vali_mae_loss = val_or_test(vali_loader)
     # test
-    test_loss, test_mae_loss, test_forecast_loss, test_forecast_mae_loss = val_or_test(test_loader, True, 'base')
+    test_loss, test_mae_loss = val_or_test(test_loader, True, 'base')
 model.train()
-
-if args.task_name == 'short_term_forecast':
-    exit()
 
 print(
     "Horizon: {0} Pre-eval | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}".format(
         args.pred_len, vali_loss, vali_mae_loss, test_loss, test_mae_loss))
-print(
-    "Horizon: {0} NEMS forecasted | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}".format(
-        args.pred_len, vali_forecast_loss, vali_forecast_mae_loss, test_forecast_loss, test_forecast_mae_loss))
 
-# if is_zero_shot_short_horizon:
-#     print('Zero shot short horizon forecasting, ending inference...')
-#     exit()
+if args.task_name == 'short_term_forecast':
+    print('Zero shot short horizon forecasting, ending inference...')
+    exit()
+
 
 # ---- Training ----
+print(f'[DEBUG]: Training for horizon length {args.pred_len}...')
 scaler = torch.cuda.amp.GradScaler()
 optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 
@@ -290,8 +259,7 @@ max_norm = 5.0
 
 losses = []
 start = time.time()
-for (batch_x, batch_y, batch_x_mark, batch_y_mark,
-     nems_forecast_x, nems_forecast_y, input_mask) in tqdm(train_loader, total=len(train_loader)):
+for (batch_x, batch_y, batch_x_mark, batch_y_mark, input_mask) in tqdm(train_loader, total=len(train_loader)):
     batch_x = batch_x.float().to(device)
     batch_y = batch_y.float().to(device)
     input_mask = input_mask.float().to(device)
@@ -336,19 +304,17 @@ print(f'Time elapsed: {elapsed}')
 scheduler.step()
 
 # ---- Evaluation ----
+print(f'[DEBUG]: Fine-tuned eval for horizon length {args.pred_len}...')
 model.eval()
 with torch.no_grad():
     # validation
-    vali_loss, vali_mae_loss, vali_forecast_loss, vali_forecast_mae_loss = val_or_test(vali_loader)
+    vali_loss, vali_mae_loss = val_or_test(vali_loader)
     # test
-    test_loss, test_mae_loss, test_forecast_loss, test_forecast_mae_loss = val_or_test(test_loader, True, 'post-lp')
+    test_loss, test_mae_loss = val_or_test(test_loader, True, 'post-lp')
 model.train()
 
 print(
     "Horizon: {0} LP-eval | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}".format(
         args.pred_len, vali_loss, vali_mae_loss, test_loss, test_mae_loss))
-print(
-    "Horizon: {0} NEMS forecasted | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}\n".format(
-        args.pred_len, vali_forecast_loss, vali_forecast_mae_loss, test_forecast_loss, test_forecast_mae_loss))
 
 torch.save(model.state_dict(), str(path) + '/' + 'checkpoint')

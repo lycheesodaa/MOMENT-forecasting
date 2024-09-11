@@ -153,15 +153,14 @@ class Dataset_Demand(Dataset):
         df_raw = pd.read_csv(os.path.join(self.root_path,
                                           self.data_path))
 
-        # encode text features to numerical
-        df_raw['period'] = pd.Categorical(df_raw['period']).codes
-        df_raw['day_of_week'] = pd.Categorical(df_raw['day_of_week']).codes
-        df_raw['is_weekend'] = pd.Categorical(df_raw['is_weekend']).codes
-        df_raw['weatherDesc'] = pd.Categorical(df_raw['weatherDesc']).codes
+        self.has_nems = 'forecast' in df_raw.columns
 
-        # only elroy's features
-        # df_raw.drop(columns=['winddirDegree', 'windGustKmph', 'weatherDesc', 'visibility',
-        #                      'pressure', 'cloudcover', 'dewPointC', 'uvIndex','feelsLikeC'], inplace=True)
+        # encode text features to numerical
+        if df_raw.shape[1] != df_raw.select_dtypes(include=np.number).shape[1]:
+            df_raw['period'] = pd.Categorical(df_raw['period']).codes
+            df_raw['day_of_week'] = pd.Categorical(df_raw['day_of_week']).codes
+            df_raw['is_weekend'] = pd.Categorical(df_raw['is_weekend']).codes
+            df_raw['weatherDesc'] = pd.Categorical(df_raw['weatherDesc']).codes
 
         train_ratio = 0.6
         val_ratio = 0.2
@@ -190,15 +189,15 @@ class Dataset_Demand(Dataset):
         if self.scale:
             train_data = df_data[border1s[0]:border2s[0]]
             self.target_scaler.fit(train_data[self.target].values.reshape(-1, 1))
-            self.nems_scaler.fit(train_data['forecast'].values.reshape(-1, 1))
             self.scaler.fit(train_data.values)
             data = self.scaler.transform(df_data.values)
         else:
             data = df_data.values
 
-        # extract the forecast column AFTER scaling
-        self.nems_forecast = data[border1:border2, 2]
-        data = np.delete(data, 2, axis=1)
+        if self.has_nems:
+            # extract the forecast column AFTER scaling
+            self.nems_forecast = data[border1:border2, 2]
+            data = np.delete(data, 2, axis=1)
 
         df_stamp = df_raw[['datetime']][border1:border2]
         df_stamp['datetime'] = pd.to_datetime(df_stamp['datetime'])
@@ -232,10 +231,8 @@ class Dataset_Demand(Dataset):
         seq_y = self.data_y[r_begin:r_end].T
         seq_x_mark = self.data_stamp[s_begin:s_end].T
         seq_y_mark = self.data_stamp[r_begin:r_end].T
-        nem_forecast_x = self.nems_forecast[s_begin:s_end].T
-        nem_forecast_y = self.nems_forecast[r_begin:r_end].T
 
-        return seq_x, seq_y, seq_x_mark, seq_y_mark, nem_forecast_x, nem_forecast_y, input_mask
+        return seq_x, seq_y, seq_x_mark, seq_y_mark, input_mask
 
     def __len__(self):
         return len(self.data_x) - self.seq_len - self.pred_len + 1
@@ -245,8 +242,3 @@ class Dataset_Demand(Dataset):
 
     def target_inverse_transform(self, data):
         return self.target_scaler.inverse_transform(data)
-
-    def nems_inverse_transform(self, data):
-        # we need to original values, so this would be incorrect since it was fit on only train data
-        # ignore for now, and replace with post-processing
-        return self.nems_scaler.inverse_transform(data)

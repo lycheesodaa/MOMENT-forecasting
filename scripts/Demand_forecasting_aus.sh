@@ -16,6 +16,6 @@ do
     --label_len 0 \
     --pred_len $pred_len \
     --learning_rate $learning_rate \
-    --des 'Experiment' \
-    --model_comment $comment | tee results/MOMENT_Demand_short_horizon_${pred_len}.txt
+    --des 'AUS' \
+    --model_comment $comment | tee results/MOMENT_Demand_AUS_${pred_len}.txt
 done
