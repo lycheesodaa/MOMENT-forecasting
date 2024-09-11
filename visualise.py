@@ -13,6 +13,7 @@ from torch.nn.functional import mse_loss
 from tqdm import tqdm
 
 from data_provider.data_factory import data_dict
+
 from utils.tools import MAPELoss, calculate_mse, calculate_mape
 
 save_path = 'figures/demand/model_comparison/'
@@ -22,7 +23,17 @@ predlens = [1, 12, 72]
 
 batch_size = 16
 using_short_horizon_forecasting = False
-value_vars_list = ['moment_lp', 'moirai_zs', 'moirai_ft', 'lag_llama_ft', 'lstm', 'conv_lstm', 'gru', 'gru_att', 'true', 'forecast']
+value_vars_list = ['moment', 'moirai', 'lag_llama', 'lstm', 'conv_lstm', 'gru', 'gru_att', 'true', 'forecast']
+vars_name_map = {
+    'moment': 'MOMENT',
+    'moirai': 'MOIRAI',
+    'lag_llama': 'Lag-Llama',
+    'lstm': 'LSTM',
+    'conv_lstm': 'Conv-LSTM',
+    'gru': 'GRU',
+    'gru_att': 'GRU-Attention',
+    'forecast': 'NEM Forecast'
+}
 
 plot_lianlian_tasks = True
 compare_lp_vs_base_loss = False
@@ -46,9 +57,9 @@ def load_data(_pred_len):
     df = pd.read_csv(f'results/data/MOMENT_Demand_pl{_pred_len}_base_predictions.csv', index_col=0)
     if _pred_len > 12 or not using_short_horizon_forecasting:
         post_lp = pd.read_csv(f'results/data/MOMENT_Demand_pl{_pred_len}_post-lp_predictions.csv', index_col=0)
-        df['moment_lp'] = post_lp['pred']
+        df['moment'] = post_lp['pred']
     df.rename(columns={
-        'pred': 'moment'
+        'pred': 'moment_zs'
     }, inplace=True)
     df = halve_if_duplicated(df)
 
@@ -64,14 +75,14 @@ def load_data(_pred_len):
     df['moirai_zs'] = moirai['pred_median']
     moirai = pd.read_csv(f'results/data/MOIRAI_pl{_pred_len}_finetuned.csv')
     moirai = halve_if_duplicated(moirai)
-    df['moirai_ft_mean'] = moirai['pred_mean']
-    df['moirai_ft'] = moirai['pred_median']
+    df['moirai_mean'] = moirai['pred_mean']
+    df['moirai'] = moirai['pred_median']
 
     # load Lag-Llama predictions into df
     lag_llama = pd.read_csv(f'results/data/Lag-Llama_pl{_pred_len}_finetuned.csv')
     lag_llama = halve_if_duplicated(lag_llama)
-    df['lag_llama_ft_mean'] = lag_llama['pred_mean']
-    df['lag_llama_ft'] = lag_llama['pred_median']
+    df['lag_llama_mean'] = lag_llama['pred_mean']
+    df['lag_llama'] = lag_llama['pred_median']
 
     # load ConvLSTM predictions into df
     conv_lstm = pd.read_csv(f'results/data/ConvLSTM_Demand_pl{_pred_len}_dm200_predictions.csv')
@@ -89,6 +100,34 @@ def load_data(_pred_len):
     df['gru_att'] = gru_att['pred']
 
     return df
+
+
+def plot_multiple(df, title, path_to_save):
+    columns_to_plot = [col for col in value_vars_list if col != 'true']
+
+    # Create a 4x2 grid of subplots
+    fig, axes = plt.subplots(2, 4, figsize=(20, 8), sharex=True, sharey=True)
+    fig.suptitle(title, fontsize=20)
+
+    # Flatten the axes array for easy iteration
+    axes = axes.flatten()
+
+    # Plot each column
+    for i, col in enumerate(columns_to_plot):
+        sns.lineplot(data=df, x='date', y='true', ax=axes[i], label='true')
+        sns.lineplot(data=df, x='date', y=col, ax=axes[i], label=col, errorbar='pi')
+
+        axes[i].set_title(f'{vars_name_map[col]}', fontsize=16)
+        axes[i].set_xlabel('Date', fontsize=14)
+        axes[i].set_ylabel('Demand', fontsize=14)
+        axes[i].tick_params(axis='x', labelrotation=25)
+        axes[i].legend()
+
+    fig.savefig(path_to_save, bbox_inches='tight')
+
+    # Adjust layout and show plot
+    plt.tight_layout()
+    plt.show()
 
 
 for pred_len in tqdm(predlens):
@@ -127,19 +166,10 @@ for pred_len in tqdm(predlens):
             end_date = start_date + timedelta(days=1)
             sampled_day = df.query(f"'{start_date}' <= date <= '{end_date}'")
             # print(sampled_day['date'].max())
-            melted_day = sampled_day.melt(id_vars='date', value_vars=value_vars_list, var_name='ts',
-                                            value_name='demand')
-            fig = plt.figure(figsize=(12, 8))
-            sns.lineplot(data=melted_day, x='date', y='demand', hue='ts', errorbar='pi')
             day_of_week_sampled = day_['day_of_week']
-            plt.title(f'Day #{i + 1} - {day_of_week_sampled} (Horizon {pred_len})', fontsize=24)
-            plt.xlabel('Date', fontsize=20)
-            plt.ylabel('Demand', fontsize=20)
-            plt.legend(title='', fontsize=16)
-            plt.xticks(fontsize=16, rotation=25, ha='right')
-            plt.yticks(fontsize=16)
-            fig.savefig(save_path + f'Demand_pl{pred_len}_predictions_day{i + 1}.png', bbox_inches='tight')
-            plt.show()
+            plot_multiple(sampled_day,
+                          f'Day #{i + 1} - {day_of_week_sampled} (Horizon {pred_len})',
+                          save_path + f'Demand_pl{pred_len}_predictions_day{i + 1}.png')
 
         # indexes are sampled from a previous run
         monday_indexes = [55680, 56016, 56520, 52824, 58200, 53496]
@@ -150,18 +180,9 @@ for pred_len in tqdm(predlens):
             end_date = start_date + timedelta(days=7)
             sampled_week = df.query(f"'{start_date}' <= date <= '{end_date}'")
             # print(sampled_week['date'].max())
-            melted_week = sampled_week.melt(id_vars='date', value_vars=value_vars_list, var_name='ts',
-                                            value_name='demand')
-            fig = plt.figure(figsize=(12, 8))
-            sns.lineplot(data=melted_week, x='date', y='demand', hue='ts', errorbar='pi')
-            plt.title(f'Week #{i + 1} (Horizon {pred_len})', fontsize=24)
-            plt.xlabel('Date', fontsize=20)
-            plt.ylabel('Demand', fontsize=20)
-            plt.legend(title='', fontsize=16)
-            plt.xticks(fontsize=16, rotation=25, ha='right')
-            plt.yticks(fontsize=16)
-            fig.savefig(save_path + f'Demand_pl{pred_len}_predictions_week{i + 1}.png', bbox_inches='tight')
-            plt.show()
+            plot_multiple(sampled_week,
+                          f'Week #{i + 1} (Horizon {pred_len})',
+                          save_path + f'Demand_pl{pred_len}_predictions_week{i + 1}.png')
 
         month_indexes = [54768, 58440, 59904]
         month_indexes = sorted(month_indexes)
@@ -171,18 +192,9 @@ for pred_len in tqdm(predlens):
             end_date = start_date + relativedelta(months=1)
             sampled_month = df.query(f"'{start_date}' <= date <= '{end_date}'")
             # print(sampled_month['date'].max())
-            melted_month = sampled_month.melt(id_vars='date', value_vars=value_vars_list, var_name='ts',
-                                              value_name='demand')
-            fig = plt.figure(figsize=(25, 8))
-            sns.lineplot(data=melted_month, x='date', y='demand', hue='ts', errorbar='pi')
-            plt.title(f'Month #{i + 1} (Horizon {pred_len})', fontsize=28)
-            plt.xlabel('Date', fontsize=24)
-            plt.ylabel('Demand', fontsize=24)
-            plt.legend(title='', fontsize=20)
-            plt.xticks(fontsize=20, rotation=25, ha='right')
-            plt.yticks(fontsize=20)
-            fig.savefig(save_path + f'Demand_pl{pred_len}_predictions_month{i + 1}.png', bbox_inches='tight')
-            plt.show()
+            plot_multiple(sampled_month,
+                          f'Month #{i + 1} (Horizon {pred_len})',
+                          save_path + f'Demand_pl{pred_len}_predictions_month{i + 1}.png')
 
         # continue
 
@@ -239,10 +251,10 @@ for pred_len in tqdm(predlens):
     cols_to_process = [col for col in value_vars_list if col != "true"]
 
     if pred_len <= 12 and using_short_horizon_forecasting:
-        cols_to_process = [col for col in cols_to_process if col != "moment_lp"]
+        cols_to_process = [col for col in cols_to_process if col != "moment"]
 
     if compare_lp_vs_base_loss:
-        cols_to_process = ['moment', 'moment_lp']
+        cols_to_process = ['moment_zs', 'moment']
         save_path = 'figures/demand/lp_vs_base_loss/'
 
     data_dict = {}

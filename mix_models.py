@@ -66,7 +66,7 @@ for pred_len in tqdm(predlens):
     df['moirai_ft'] = moirai['pred_median']
 
     # load Lag-Llama predictions into df
-    lag_llama = pd.read_csv(f'results/data/MOIRAI_pl{pred_len}_finetuned.csv')
+    lag_llama = pd.read_csv(f'results/data/Lag-Llama_pl{pred_len}_finetuned.csv')
     lag_llama = halve_if_duplicated(lag_llama)
     df['lag_llama_ft_mean'] = lag_llama['pred_mean']
     df['lag_llama_ft'] = lag_llama['pred_median']
