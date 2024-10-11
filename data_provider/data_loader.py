@@ -156,11 +156,11 @@ class Dataset_Demand(Dataset):
         self.has_nems = 'forecast' in df_raw.columns
 
         # encode text features to numerical
-        if df_raw.shape[1] != df_raw.select_dtypes(include=np.number).shape[1]:
-            df_raw['period'] = pd.Categorical(df_raw['period']).codes
-            df_raw['day_of_week'] = pd.Categorical(df_raw['day_of_week']).codes
-            df_raw['is_weekend'] = pd.Categorical(df_raw['is_weekend']).codes
-            df_raw['weatherDesc'] = pd.Categorical(df_raw['weatherDesc']).codes
+        # if df_raw.shape[1] != df_raw.select_dtypes(include=np.number).shape[1]:
+        #     if 'period' in df_raw.columns: df_raw['period'] = pd.Categorical(df_raw['period']).codes
+        #     if 'day_of_week' in df_raw.columns: df_raw['day_of_week'] = pd.Categorical(df_raw['day_of_week']).codes
+        #     if 'is_weekend' in df_raw.columns: df_raw['is_weekend'] = pd.Categorical(df_raw['is_weekend']).codes
+        #     if 'weatherDesc' in df_raw.columns: df_raw['weatherDesc'] = pd.Categorical(df_raw['weatherDesc']).codes
 
         train_ratio = 0.6
         val_ratio = 0.2
@@ -231,8 +231,10 @@ class Dataset_Demand(Dataset):
         seq_y = self.data_y[r_begin:r_end].T
         seq_x_mark = self.data_stamp[s_begin:s_end].T
         seq_y_mark = self.data_stamp[r_begin:r_end].T
+        nem_forecast_x = self.nems_forecast[s_begin:s_end].T
+        nem_forecast_y = self.nems_forecast[r_begin:r_end].T
 
-        return seq_x, seq_y, seq_x_mark, seq_y_mark, input_mask
+        return seq_x, seq_y, seq_x_mark, seq_y_mark, nem_forecast_x, nem_forecast_y, input_mask
 
     def __len__(self):
         return len(self.data_x) - self.seq_len - self.pred_len + 1

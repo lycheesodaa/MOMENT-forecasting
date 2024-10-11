@@ -97,7 +97,7 @@ parser.add_argument('--results_path', type=str, default='./results/data/')
 
 args = parser.parse_args()
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = torch.device('cuda:1')
+device = torch.device('cuda:0')
 criterion = torch.nn.MSELoss().to(device)
 mae_metric = torch.nn.L1Loss().to(device)
 
@@ -230,7 +230,9 @@ test_data, test_loader = data_provider(args, 'test')
 model.eval()
 with torch.no_grad():
     # validation
-    vali_loss, vali_mae_loss = val_or_test(vali_loader)
+    # vali_loss, vali_mae_loss = val_or_test(vali_loader)
+    vali_loss = 0
+    vali_mae_loss = 0
     # test
     test_loss, test_mae_loss = val_or_test(test_loader, True, 'base')
 model.train()
@@ -308,10 +310,9 @@ print(f'[DEBUG]: Fine-tuned eval for horizon length {args.pred_len}...')
 model.eval()
 with torch.no_grad():
     # validation
-    vali_loss, vali_mae_loss = val_or_test(vali_loader)
+    # vali_loss, vali_mae_loss = val_or_test(vali_loader)
     # test
     test_loss, test_mae_loss = val_or_test(test_loader, True, 'post-lp')
-model.train()
 
 print(
     "Horizon: {0} LP-eval | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}".format(

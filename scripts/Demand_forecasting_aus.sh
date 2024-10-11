@@ -1,7 +1,8 @@
 comment='MOMENT-Demand'
 learning_rate=0.001
 
-for pred_len in 1 12 72
+#for pred_len in 1 12 72
+for pred_len in 24 36 48 60
 #for pred_len in 96 192 356
 do
   python run_demand.py \
@@ -16,6 +17,7 @@ do
     --label_len 0 \
     --pred_len $pred_len \
     --learning_rate $learning_rate \
+    --batch_size 32 \
     --des 'AUS' \
     --model_comment $comment | tee results/MOMENT_Demand_AUS_${pred_len}.txt
 done

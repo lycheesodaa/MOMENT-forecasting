@@ -16,21 +16,21 @@ from data_provider.data_factory import data_dict
 
 from utils.tools import MAPELoss, calculate_mse, calculate_mape
 
-save_path = 'figures/demand/model_comparison/'
+save_path = 'figures/demand_aus/model_comparison/'
 
+# predlens = [96, 192, 356]
+predlens = [1, 12, 72]
 # predlens = [1, 12, 24, 36, 48, 60, 72]
-predlens = [24, 36, 48, 60]
-# predlens = [1, 12, 72]
 
 batch_size = 16
 using_short_horizon_forecasting = False
-plot_lianlian_tasks = True
-compare_lp_vs_base_loss = False
-value_vars_list = ['moment_zs', 'moment', 'moirai_zs', 'moirai',
-                   # 'lag_llama', 'lag_llama_zs',
-                   'ttm_zs', 'ttm', 'chronos_zs', 'chronos',
+value_vars_list = ['moment_zs', 'moment',
+                   'moirai_zs', 'moirai',
+                   'lag_llama', 'lag_llama_zs',
+                   # 'ttm_zs', 'ttm',
+                   'chronos_zs', 'chronos',
                    'lstm', 'conv_lstm', 'gru', 'gru_att',
-                   'true', 'forecast']
+                   'true']
 vars_name_map = {
     'moment': 'MOMENT',
     'moment_zs': 'MOMENT_zeroshot',
@@ -50,6 +50,9 @@ vars_name_map = {
     'forecast': 'NEM Forecast'
 }
 
+plot_lianlian_tasks = False
+compare_lp_vs_base_loss = False
+
 
 def halve_if_duplicated(data):
     # halve the data (data processing accidentally concatenated two copies of the same data)
@@ -65,68 +68,81 @@ def halve_if_duplicated(data):
 Add in additional dataframes here and rename pred columns to match the added name in value_vars_list  
 '''
 def load_data(_pred_len):
+    csv_folder = 'results/data_aus/'
+
     # load MOMENT predictions
-    df = pd.read_csv(f'results/data/MOMENT_Demand_pl{_pred_len}_base_predictions.csv', index_col=0)
+    df = pd.read_csv(csv_folder + f'MOMENT_Demand_pl{_pred_len}_base_predictions.csv', index_col=0)
     if _pred_len > 12 or not using_short_horizon_forecasting:
-        post_lp = pd.read_csv(f'results/data/MOMENT_Demand_pl{_pred_len}_post-lp_predictions.csv', index_col=0)
+        post_lp = pd.read_csv(csv_folder + f'MOMENT_Demand_pl{_pred_len}_post-lp_predictions.csv', index_col=0)
         df['moment'] = post_lp['pred']
     df.rename(columns={
         'pred': 'moment_zs'
     }, inplace=True)
     df = halve_if_duplicated(df)
 
-    # load MOIRAI predictions into df
-    moirai = pd.read_csv(f'results/data/MOIRAI_pl{_pred_len}_zero_shot.csv')
-    moirai = halve_if_duplicated(moirai)
-    df['moirai_zs'] = moirai['pred_mean']
-    moirai = pd.read_csv(f'results/data/MOIRAI_pl{_pred_len}_finetuned.csv')
-    moirai = halve_if_duplicated(moirai)
-    df['moirai'] = moirai['pred_mean']
-
-    # load Lag-Llama predictions into df
-    # lag_llama = pd.read_csv(f'results/data/Lag-Llama_pl{_pred_len}_zero_shot.csv')
-    # lag_llama = halve_if_duplicated(lag_llama)
-    # df['lag_llama_zs'] = lag_llama['pred_mean']
-    # lag_llama = pd.read_csv(f'results/data/Lag-Llama_pl{_pred_len}_finetuned.csv')
-    # lag_llama = halve_if_duplicated(lag_llama)
-    # df['lag_llama'] = lag_llama['pred_mean']
-
     # load LSTM predictions into df
-    lstm = pd.read_csv(f'results/data/LSTM_Demand_pl{_pred_len}_dm200_predictions.csv', index_col=0)
+    lstm = pd.read_csv(csv_folder + f'LSTM_Demand_pl{_pred_len}_dm200_predictions.csv', index_col=0)
     lstm = halve_if_duplicated(lstm)
     df['lstm'] = lstm['pred']
 
+    try:
+        # load MOIRAI predictions into df
+        moirai = pd.read_csv(csv_folder + f'MOIRAI_AUS_pl{_pred_len}_zero_shot.csv')
+        moirai = halve_if_duplicated(moirai)
+        df['moirai_zs_mean'] = moirai['pred_mean']
+        df['moirai_zs'] = moirai['pred_median']
+        moirai = pd.read_csv(csv_folder + f'MOIRAI_AUS_pl{_pred_len}_finetuned.csv')
+        moirai = halve_if_duplicated(moirai)
+        df['moirai_mean'] = moirai['pred_mean']
+        df['moirai'] = moirai['pred_median']
+    except Exception as e:
+        print(e)
+
+    try:
+        # load Lag-Llama predictions into df
+        lag_llama = pd.read_csv(csv_folder + f'Lag-Llama_pl{_pred_len}_zero_shot.csv')
+        lag_llama = halve_if_duplicated(lag_llama)
+        df['lag_llama_zs'] = lag_llama['pred'] # TODO CHANGE
+        lag_llama = pd.read_csv(csv_folder + f'Lag-Llama_pl{_pred_len}_finetuned.csv')
+        lag_llama = halve_if_duplicated(lag_llama)
+        df['lag_llama'] = lag_llama['pred'] # TODO CHANGE
+    except Exception as e:
+        print(e)
+
     # load ConvLSTM predictions into df
-    conv_lstm = pd.read_csv(f'results/data/ConvLSTM_Demand_pl{_pred_len}_dm200_predictions.csv')
+    conv_lstm = pd.read_csv(csv_folder + f'ConvLSTM_Demand_pl{_pred_len}_dm200_predictions.csv')
     conv_lstm = halve_if_duplicated(conv_lstm)
     df['conv_lstm'] = conv_lstm['pred']
 
     # load GRU predictions into df
-    gru = pd.read_csv(f'results/data/GRU_Demand_pl{_pred_len}_dm200_predictions.csv')
+    gru = pd.read_csv(csv_folder + f'GRU_Demand_pl{_pred_len}_dm200_predictions.csv')
     gru = halve_if_duplicated(gru)
     df['gru'] = gru['pred']
 
     # load GRU_Attention predictions into df
-    gru_att = pd.read_csv(f'results/data/GRUAttention_Demand_pl{_pred_len}_dm200_predictions.csv')
+    gru_att = pd.read_csv(csv_folder + f'GRUAttention_Demand_pl{_pred_len}_dm200_predictions.csv')
     gru_att = halve_if_duplicated(gru_att)
     df['gru_att'] = gru_att['pred']
 
     # load Chronos predictions into df
     if _pred_len <= 60:
-        chronos = pd.read_csv(f'results/data/Chronos_pl{_pred_len}_zero_shot.csv')
+        chronos = pd.read_csv(csv_folder + f'Chronos_pl{_pred_len}_zero_shot.csv')
         df['chronos_zs'] = chronos['pred']
-    chronos = pd.read_csv(f'results/data/Chronos_pl{_pred_len}_finetuned.csv')
+    chronos = pd.read_csv(csv_folder + f'Chronos_pl{_pred_len}_finetuned.csv')
     df['chronos'] = chronos['pred']
 
-    # load TTMs predictions into df
-    ttm = pd.read_csv(f'results/data/TTMs_pl{_pred_len}_zeroshot.csv')
-    # TTMs has the correct number of windows; not sure why the rest don't -> shorten df to match
-    df = df.iloc[1:len(ttm) + 1].reset_index()
-    df['ttm_zs'] = ttm['actual']
-    # ttm = pd.read_csv(f'results/data/TTMs_pl{_pred_len}_fewshot5.csv')
-    # df['ttm_5shot'] = ttm['actual']
-    ttm = pd.read_csv(f'results/data/TTMs_pl{_pred_len}_fullshot.csv')
-    df['ttm'] = ttm['actual']
+    try:
+        # load TTMs predictions into df
+        ttm = pd.read_csv(csv_folder + f'TTMs_pl{_pred_len}_zeroshot.csv')
+        # TTMs has the correct number of windows; not sure why the rest don't -> shorten df to match
+        df = df.iloc[1:len(ttm) + 1].reset_index()
+        df['ttm_zs'] = ttm['actual']
+        # ttm = pd.read_csv(csv_folder + f'TTMs_pl{_pred_len}_fewshot5.csv')
+        # df['ttm_5shot'] = ttm['actual']
+        ttm = pd.read_csv(csv_folder + f'TTMs_pl{_pred_len}_fullshot.csv')
+        df['ttm'] = ttm['actual']
+    except Exception as e:
+        print(e)
 
     return df
 
@@ -135,7 +151,7 @@ def plot_multiple(df, title, path_to_save):
     columns_to_plot = [col for col in value_vars_list if col != 'true']
 
     # Create a 4x2 grid of subplots
-    fig, axes = plt.subplots(3, 5, figsize=(15, 15), sharex=True, sharey=True)
+    fig, axes = plt.subplots(2, 4, figsize=(20, 8), sharex=True, sharey=True)
     fig.suptitle(title, fontsize=20)
 
     # Flatten the axes array for easy iteration
@@ -162,22 +178,11 @@ def plot_multiple(df, title, path_to_save):
 for pred_len in tqdm(predlens):
     df = load_data(pred_len)
 
+    raw_data = pd.read_csv('data/demand_data_all_nsw_numerical.csv')
+    raw_data['date'] = pd.to_datetime(raw_data['datetime'])
+
     if pred_len > 60:
         value_vars_list = [col for col in value_vars_list if col != "chronos_zs"]
-
-    # re-insert the forecast column since the data processing might have meddled with it
-    raw_data = pd.read_csv('data/demand_data_all_cleaned.csv')
-    raw_data['date'] = pd.to_datetime(raw_data['datetime'])
-    raw_data_forecast = raw_data[['date', 'forecast']]
-    # df.drop(columns=['nems_forecast'], inplace=True)
-    df = pd.merge(df, raw_data_forecast, on='date', how='left')
-    if df.isna().any().any():
-        # droplast if the number of missing windows < 20, otherwise there may be an error
-        last_valid_index = df.dropna().index[-1]
-        if (len(df) - last_valid_index) // pred_len < 20:
-            df.dropna(inplace=True)
-        else:
-            exit()
 
     if plot_lianlian_tasks:
         test = df.melt(id_vars='date', value_vars=value_vars_list, var_name='ts', value_name='demand')
@@ -191,12 +196,11 @@ for pred_len in tqdm(predlens):
         plt.yticks(fontsize=28)
         fig.savefig(save_path + f'Demand_pl{pred_len}_predictions_all.png', bbox_inches='tight')
 
+
         day_indexes = []
-        # for i in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']:
-        for i in ['Wednesday']:
+        for i in range(7):
             days = raw_data.iloc[-int(len(raw_data) * 0.2 + pred_len):-pred_len][(raw_data['hour'] == 0) & (raw_data['day_of_week'] == i)].sample(n=1)
             day_indexes.extend(list(days.index))
-        # print(day_indexes)
         # day_indexes = [58200, 56544, 49848, 54072, 50904, 60168, 50616] # indexes are sampled from a previous run
         days_chosen = raw_data.iloc[day_indexes]
         for i, (index, day_) in enumerate(days_chosen.iterrows()):
@@ -210,7 +214,7 @@ for pred_len in tqdm(predlens):
                           save_path + f'Demand_pl{pred_len}_predictions_day{i + 1}.png')
 
         monday_indexes = []
-        mondays_temp = raw_data.iloc[-int(len(raw_data) * 0.2 + pred_len):-pred_len][(raw_data['hour'] == 0) & (raw_data['day_of_week'] == 'Monday')].sample(n=1)
+        mondays_temp = raw_data.iloc[-int(len(raw_data) * 0.2 + pred_len):-pred_len][(raw_data['hour'] == 0) & (raw_data['day_of_week'] == 0)].sample(n=6)
         monday_indexes.extend(list(mondays_temp.index))
         # monday_indexes = [55680, 56016, 56520, 52824, 58200, 53496]
         monday_indexes = sorted(monday_indexes)
@@ -225,7 +229,7 @@ for pred_len in tqdm(predlens):
                           save_path + f'Demand_pl{pred_len}_predictions_week{i + 1}.png')
 
         month_indexes = []
-        months_temp = raw_data.iloc[-int(len(raw_data) * 0.2 + pred_len):-pred_len][(raw_data['hour'] == 0) & (raw_data['day'] == 1)].sample(n=1)
+        months_temp = raw_data.iloc[-int(len(raw_data) * 0.2 + pred_len):-pred_len][(raw_data['hour'] == 0) & (raw_data['day'] == 1)].sample(n=3)
         month_indexes.extend(list(months_temp.index))
         # month_indexes = [54768, 58440, 59904]
         month_indexes = sorted(month_indexes)
