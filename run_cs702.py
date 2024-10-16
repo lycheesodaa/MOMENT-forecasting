@@ -121,7 +121,7 @@ path = os.path.join(args.checkpoints,
                     setting + '-' + args.model_comment)  # unique checkpoint saving path
 
 if not os.path.exists(path):
-    os.mkdir(path)
+    os.makedirs(path, exist_ok=True)
 
 if not os.path.exists(args.results_path):
     os.mkdir(args.results_path)
@@ -130,7 +130,7 @@ if not os.path.exists(args.results_path):
 def find_best_permutations_batched(correct_tensor, wrong_order_tensor):
     # Ensure tensors are 3D
     assert correct_tensor.dim() == 3 and wrong_order_tensor.dim() == 3, "Input tensors must be 3D"
-    assert correct_tensor.shape == wrong_order_tensor.shape, "Input tensors must have the same shape"
+    assert correct_tensor.shape == wrong_order_tensor.shape, f"Input tensors must have the same shape: {correct_tensor.shape} != {wrong_order_tensor.shape}"
     
     batch_size, num_vectors, vector_dim = correct_tensor.shape
     
@@ -162,58 +162,46 @@ def find_best_permutations_batched(correct_tensor, wrong_order_tensor):
     
     # Convert list of permutations to tensor
     best_permutations_tensor = torch.tensor(best_permutations, dtype=torch.long)
+
+    assert best_permutations_tensor.shape == (batch_size, num_vectors)
     
     return best_permutations_tensor
 
 
-def val_or_test(loader, output_csv=False, stage=None):
-    total_loss = []
-    total_mae_loss = []
+def run_test(loader, output_csv=False, stage=None):
     all_outputs = []
 
-    for (batch_seq, batch_cdd, batch_next_point, batch_labels, input_mask) in tqdm(loader, total=len(loader)):
-        bsz, seq_len, n_feats = batch_seq.shape
-        batch_seq = batch_seq.float().to(device).permute(0, 2, 1).contiguous()
-        batch_seq = F.pad(batch_seq, (0, 512 - seq_len), "constant", 0) # pad sequence since moment is fixed 512 input
-        batch_cdd = batch_cdd.float().to(device)
-        input_mask = input_mask.to(device)
+    for batch in tqdm(loader, total=len(loader)):
+        _batch_seq, _batch_cdd, _input_mask = [b.to(device) for b in batch]
+        bsz, seq_len, n_feats = _batch_seq.shape
+
+        _batch_seq = _batch_seq.permute(0, 2, 1).contiguous()
+        _batch_seq = F.pad(_batch_seq, (0, 512 - seq_len), "constant", 0) # pad sequence since moment is fixed 512 input
 
         if args.use_amp:
             with torch.cuda.amp.autocast():
-                pred = model(batch_seq, input_mask) # this outputs an ndarray
+                _pred = model(_batch_seq, _input_mask) # this outputs an ndarray
         else:
-            pred = model(batch_seq, input_mask)  # this outputs an ndarray
+            _pred = model(_batch_seq, _input_mask)  # this outputs an ndarray
 
-        print(pred.shape)
-        pred = pred[:, :3, :]
-        wrong_order = batch_cdd.detach()[:, :, :]
-        
-        best_perm_batched = find_best_permutations_batched(pred, wrong_order) # should be (batch, 3)
-        pred_next_point = pred[:, -1:, :].squeeze() # should be (batch, num_features)
+        _pred = _pred.permute(0, 2, 1).contiguous()
+        pred_next_point = _pred[:, -1:, :].squeeze().cpu() # should be (batch, num_features)
+        _pred = _pred[:, :3, :]
+        wrong_order = _batch_cdd.detach()
+
+        best_perm_batched = find_best_permutations_batched(_pred, wrong_order) # should be (batch, 3)
         output_res = torch.cat((best_perm_batched, pred_next_point), dim=1) # should be (batch, 3 + num_features)
-        
-        loss = criterion(pred, wrong_order)
-        mae_loss = mae_metric(pred, wrong_order)
 
-        total_loss.append(loss.item())
-        total_mae_loss.append(mae_loss.item())
-
-        if output_csv:
-            all_outputs.append(output_res)
+        all_outputs.append(output_res)
 
     if output_csv:
         # Concatenate all predictions and indices
         all_outputs = np.vstack([output.numpy() for output in all_outputs])
 
-        df = pd.DataFrame({
-            'pred': all_outputs,
-        })
-        df.to_csv(args.results_path + f'MOMENT_pl{args.pred_len}_{stage}_predictions.csv')
+        df = pd.DataFrame(all_outputs)
+        df.to_csv(args.results_path + f'MOMENT_pl{args.pred_len}_{stage}_predictions.csv', sep = ' ', index=False, header=False)
 
-    avg_loss = np.average(total_loss)
-    avg_mae_loss = np.average(total_mae_loss)
-
-    return avg_loss, avg_mae_loss
+    print('Test complete.')
 
 
 def create_datetime(row):
@@ -222,59 +210,32 @@ def create_datetime(row):
 
 
 # Forecasting task
-print(f'[DEBUG]: Forecasting for horizon length {args.pred_len}...')
 
-# short horizon performance is not good
-if args.task_name == 'short-term-forecast':
-    model = MOMENTPipeline.from_pretrained(
-        f"AutonLab/MOMENT-1-{args.moment_size}",
-        model_kwargs={
-            'task_name': 'short-horizon-forecasting',
-            'forecast_horizon': args.pred_len
-        },
-    )
-else:
-    model = MOMENTPipeline.from_pretrained(
-        f"AutonLab/MOMENT-1-{args.moment_size}",
-        model_kwargs={
-            'task_name': 'long-horizon-forecasting',
-            'forecast_horizon': args.pred_len
-        },
-    )
+model = MOMENTPipeline.from_pretrained(
+    f"AutonLab/MOMENT-1-{args.moment_size}",
+    model_kwargs={
+        'task_name': 'forecasting',
+        'forecast_horizon': args.pred_len
+    },
+)
 model.init()
-# if torch.cuda.device_count() > 1:
-#     print("Detected", torch.cuda.device_count(), "GPUs. Initialising Multi-GPU configuration...")
-#     model = DataParallel(model)
 model.to(device)
 
-train_data, train_loader = data_provider_cs702(args, 'train')
-vali_data, vali_loader = data_provider_cs702(args, 'val')
+# train_data, train_loader = data_provider_cs702(args, 'train')
+# vali_data, vali_loader = data_provider_cs702(args, 'val')
+train_data, train_loader = data_provider_cs702(args, 'full')
 test_data, test_loader = data_provider_cs702(args, 'test')
 
-# Pre-evaluation before training
-model.eval()
-with torch.no_grad():
-    # validation
-    # vali_loss, vali_mae_loss = val_or_test(vali_loader)
-    vali_loss = 0
-    vali_mae_loss = 0
-    # test
-    test_loss, test_mae_loss = val_or_test(vali_loader, True, 'base')
-model.train()
+# Zero-shot eval only, if specified
+if args.task_name == 'zero-shot':
+    print(f'[DEBUG]: Forecasting for horizon length {args.pred_len}...')
+    model.eval()
+    with torch.no_grad():
+        run_test(test_loader, True, 'zero-shot')
+    model.train()
 
-print(
-    "Horizon: {0} Pre-eval | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}".format(
-        args.pred_len, vali_loss, vali_mae_loss, test_loss, test_mae_loss))
-
-if args.task_name == 'short_term_forecast':
-    print('Zero shot short horizon forecasting, ending inference...')
+    print('Zero shot forecasting, ending inference...')
     exit()
-
-exit()
-
-
-
-
 
 # ---- Training ----
 print(f'[DEBUG]: Training for horizon length {args.pred_len}...')
@@ -291,19 +252,24 @@ max_norm = 5.0
 
 losses = []
 start = time.time()
-for (batch_x, batch_y, batch_x_mark, batch_y_mark, input_mask) in tqdm(train_loader, total=len(train_loader)):
-    batch_x = batch_x.float().to(device)
-    batch_y = batch_y.float().to(device)
-    input_mask = input_mask.float().to(device)
+for batch in tqdm(train_loader, total=len(train_loader)):
+    batch_seq, batch_cdd, batch_next_point, batch_labels, input_mask = [b.to(device) for b in batch]
+
+    bsz, seq_len, n_feats = batch_seq.shape
+    batch_seq = batch_seq.permute(0, 2, 1).contiguous()
+    batch_seq = F.pad(batch_seq, (0, 512 - seq_len), "constant", 0) # pad sequence since moment is fixed 512 input
 
     optimizer.zero_grad(set_to_none=True)
 
+    # train based on the last 4 points' loss (eval only shows the last point's loss instead)
     if args.use_amp:
         with torch.cuda.amp.autocast():
-            output = model(batch_x, input_mask)
+            pred = model(batch_seq, input_mask)  # this outputs an ndarray
 
-            train_loss = criterion(output[:, target_index, :], batch_y[:, target_index, :])
-            # train_loss = criterion(torch.from_numpy(output), batch_y)
+            pred = pred.permute(0, 2, 1).contiguous() # (batch, pred_len, n_features)
+            true = torch.cat((batch_cdd, batch_next_point.unsqueeze(1)), dim=1)
+
+            train_loss = criterion(pred, true)
 
             # Scales the loss for mixed precision training
             scaler.scale(train_loss).backward()
@@ -315,9 +281,12 @@ for (batch_x, batch_y, batch_x_mark, batch_y_mark, input_mask) in tqdm(train_loa
             scaler.step(optimizer)
             scaler.update()
     else:
-        output = model(batch_x, input_mask)
+        pred = model(batch_seq, input_mask)  # this outputs an ndarray
 
-        train_loss = criterion(output[:, target_index, :], batch_y[:, target_index, :])
+        pred = pred.permute(0, 2, 1).contiguous()  # (batch, pred_len, n_features)
+        true = torch.cat((batch_cdd, batch_next_point.unsqueeze(1)), dim=1)
+
+        train_loss = criterion(pred, true)
 
         train_loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
@@ -339,13 +308,6 @@ scheduler.step()
 print(f'[DEBUG]: Fine-tuned eval for horizon length {args.pred_len}...')
 model.eval()
 with torch.no_grad():
-    # validation
-    # vali_loss, vali_mae_loss = val_or_test(vali_loader)
-    # test
-    test_loss, test_mae_loss = val_or_test(test_loader, True, 'post-lp')
-
-print(
-    "Horizon: {0} LP-eval | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}".format(
-        args.pred_len, vali_loss, vali_mae_loss, test_loss, test_mae_loss))
+    run_test(test_loader, True, 'lp')
 
 torch.save(model.state_dict(), str(path) + '/' + 'checkpoint')
