@@ -7,7 +7,7 @@ from torch.optim.lr_scheduler import OneCycleLR
 import torch.nn.functional as F
 import itertools
 
-from data_provider.data_factory import data_provider
+from data_provider.data_factory import data_provider_cs702
 from tqdm import tqdm
 import random
 import torch
@@ -96,10 +96,12 @@ parser.add_argument('--llm_layers', type=int, default=6)
 parser.add_argument('--percent', type=int, default=100)
 
 parser.add_argument('--results_path', type=str, default='./results/data/')
+parser.add_argument('--gpu_id', type=int, default=0)
+parser.add_argument('--moment_size', type=str, default='large', choices=['small', 'base', 'large'])
 
 args = parser.parse_args()
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = torch.device('cuda:0')
+device = torch.device(f'cuda:{args.gpu_id}')
 criterion = torch.nn.MSELoss().to(device)
 mae_metric = torch.nn.L1Loss().to(device)
 
@@ -170,7 +172,9 @@ def val_or_test(loader, output_csv=False, stage=None):
     all_outputs = []
 
     for (batch_seq, batch_cdd, batch_next_point, batch_labels, input_mask) in tqdm(loader, total=len(loader)):
-        batch_seq = batch_seq.float().to(device)
+        bsz, seq_len, n_feats = batch_seq.shape
+        batch_seq = batch_seq.float().to(device).permute(0, 2, 1).contiguous()
+        batch_seq = F.pad(batch_seq, (0, 512 - seq_len), "constant", 0) # pad sequence since moment is fixed 512 input
         batch_cdd = batch_cdd.float().to(device)
         input_mask = input_mask.to(device)
 
@@ -180,6 +184,7 @@ def val_or_test(loader, output_csv=False, stage=None):
         else:
             pred = model(batch_seq, input_mask)  # this outputs an ndarray
 
+        print(pred.shape)
         pred = pred[:, :3, :]
         wrong_order = batch_cdd.detach()[:, :, :]
         
@@ -222,7 +227,7 @@ print(f'[DEBUG]: Forecasting for horizon length {args.pred_len}...')
 # short horizon performance is not good
 if args.task_name == 'short-term-forecast':
     model = MOMENTPipeline.from_pretrained(
-        "AutonLab/MOMENT-1-large",
+        f"AutonLab/MOMENT-1-{args.moment_size}",
         model_kwargs={
             'task_name': 'short-horizon-forecasting',
             'forecast_horizon': args.pred_len
@@ -230,7 +235,7 @@ if args.task_name == 'short-term-forecast':
     )
 else:
     model = MOMENTPipeline.from_pretrained(
-        "AutonLab/MOMENT-1-large",
+        f"AutonLab/MOMENT-1-{args.moment_size}",
         model_kwargs={
             'task_name': 'long-horizon-forecasting',
             'forecast_horizon': args.pred_len
@@ -242,9 +247,9 @@ model.init()
 #     model = DataParallel(model)
 model.to(device)
 
-train_data, train_loader = data_provider(args, 'train')
-vali_data, vali_loader = data_provider(args, 'val')
-test_data, test_loader = data_provider(args, 'test')
+train_data, train_loader = data_provider_cs702(args, 'train')
+vali_data, vali_loader = data_provider_cs702(args, 'val')
+test_data, test_loader = data_provider_cs702(args, 'test')
 
 # Pre-evaluation before training
 model.eval()
@@ -254,7 +259,7 @@ with torch.no_grad():
     vali_loss = 0
     vali_mae_loss = 0
     # test
-    test_loss, test_mae_loss = val_or_test(train_loader, True, 'base')
+    test_loss, test_mae_loss = val_or_test(vali_loader, True, 'base')
 model.train()
 
 print(

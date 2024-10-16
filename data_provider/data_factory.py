@@ -47,7 +47,7 @@ def data_provider_cs702(args, flag):
     if flag == 'test':
         Data = CS702TestDataset
         shuffle_flag = False
-        drop_last = True
+        drop_last = False
         batch_size = args.batch_size
     else:
         Data = CS702TrainDataset
@@ -55,7 +55,7 @@ def data_provider_cs702(args, flag):
         drop_last = True
         batch_size = args.batch_size
         
-    data_set = Data(flag=flag)
+    data_set = Data(flag=flag, folder_path=args.root_path, percent=args.percent)
     
     data_loader = DataLoader(
         data_set,

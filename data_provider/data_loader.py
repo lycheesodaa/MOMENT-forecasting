@@ -251,16 +251,15 @@ class CS702TrainDataset(Dataset):
                  flag='train', percent=100):
         super().__init__()
         seed = 123
-        train_ratio = 0.8 * percent // 100
-        val_ratio = 0.2 * percent // 100
-        
+        train_ratio = 0.8 * (percent // 100)
+        val_ratio = 0.2 * (percent // 100)
+
         self.data = np.load(os.path.join(folder_path, file_name)).astype(np.float32)
-        train_size = int(train_ratio * len(self.data))
-        val_size = int(val_ratio * len(self.data))
+
         if flag == 'train':
-            self.data, _ = random_split(self.data, [train_size, val_size], torch.Generator().manual_seed(seed))
+            self.data, _ = random_split(self.data, [train_ratio, val_ratio], torch.Generator().manual_seed(seed))
         else:
-            _, self.data = random_split(self.data, [train_size, val_size], torch.Generator().manual_seed(seed))
+            _, self.data = random_split(self.data, [train_ratio, val_ratio], torch.Generator().manual_seed(seed))
             
         self.seq_len = seq_len
         self.candidate_len = candidate_len
@@ -270,7 +269,7 @@ class CS702TrainDataset(Dataset):
         return len(self.data) // self.seq_len
 
     def __getitem__(self, idx):
-        input_mask = np.ones(self.seq_len)
+        input_mask = np.ones(self.seq_len - self.candidate_len - 1)
         
         seq = self.data[idx * self.seq_len : idx * self.seq_len + self.given_seq_len]
         cdd = self.data[idx * self.seq_len + self.given_seq_len : (idx + 1) * self.seq_len - 1]  # exclude the last one
@@ -282,7 +281,8 @@ class CS702TrainDataset(Dataset):
 
 
 class CS702TestDataset(Dataset):
-    def __init__(self, file_name="public.npy", folder_path="./dataset", seq_len=13, candidate_len=3):
+    def __init__(self, file_name="public.npy", folder_path="./dataset", seq_len=13, candidate_len=3,
+                 flag='train', percent=100):
         super().__init__()
         self.data = np.load(os.path.join(folder_path, file_name)).astype(np.float32)
         self.seq_len = seq_len
@@ -293,7 +293,7 @@ class CS702TestDataset(Dataset):
         return len(self.data) // self.seq_len
 
     def __getitem__(self, idx):
-        input_mask = np.ones(self.seq_len)
+        input_mask = np.ones(self.seq_len - self.candidate_len)
         
         seq = self.data[idx * self.seq_len : idx * self.seq_len + self.given_seq_len]
         cdd = self.data[idx * self.seq_len + self.given_seq_len : (idx + 1) * self.seq_len]
