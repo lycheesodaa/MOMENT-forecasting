@@ -1,6 +1,7 @@
 import argparse
 from datetime import datetime
 
+from accelerate import Accelerator
 from momentfm import MOMENTPipeline
 from torch.nn import DataParallel
 from torch.optim.lr_scheduler import OneCycleLR
@@ -98,12 +99,17 @@ parser.add_argument('--percent', type=int, default=100)
 parser.add_argument('--results_path', type=str, default='./results/data/')
 parser.add_argument('--gpu_id', type=int, default=0)
 parser.add_argument('--moment_size', type=str, default='large', choices=['small', 'base', 'large'])
+parser.add_argument('--use_finetuned', type=bool, default=False)
 
 args = parser.parse_args()
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = torch.device(f'cuda:{args.gpu_id}')
-criterion = torch.nn.MSELoss().to(device)
-mae_metric = torch.nn.L1Loss().to(device)
+# device = torch.device(f'cuda:{args.gpu_id}')
+accelerator = Accelerator(
+    mixed_precision='fp16' if args.use_amp else 'no',
+    gradient_accumulation_steps=1
+)
+criterion = torch.nn.MSELoss()
+mae_metric = torch.nn.L1Loss()
 
 target_index = 0  # this is the index of the actual target feature
 
@@ -168,49 +174,138 @@ def find_best_permutations_batched(correct_tensor, wrong_order_tensor):
     return best_permutations_tensor
 
 
+def gather_predictions(all_outputs, max_chunk_size=1000):
+    num_samples = all_outputs.size(0)
+    num_features = all_outputs.size(1)
+    rank = accelerator.process_index
+    world_size = accelerator.num_processes
+
+    # Calculate total size across all processes
+    total_size = torch.tensor([num_samples], device=all_outputs.device)
+    gathered_sizes = [torch.zeros_like(total_size) for _ in range(world_size)]
+    torch.distributed.all_gather(gathered_sizes, total_size)
+    total_samples = sum(size.item() for size in gathered_sizes)
+
+    # Process in chunks
+    gathered_outputs = []
+    for i in range(0, num_samples, max_chunk_size):
+        end_idx = min(i + max_chunk_size, num_samples)
+        chunk = all_outputs[i:end_idx]
+
+        # Pad if necessary to ensure all processes have same size chunk
+        chunk_size = chunk.size(0)
+        max_chunk_size_all = torch.tensor([chunk_size], device=chunk.device)
+        torch.distributed.all_reduce(max_chunk_size_all, op=torch.distributed.ReduceOp.MAX)
+        if chunk_size < max_chunk_size_all.item():
+            padding = torch.zeros((max_chunk_size_all.item() - chunk_size, num_features),
+                                  device=chunk.device)
+            chunk = torch.cat([chunk, padding], dim=0)
+
+        # Gather chunk from all processes
+        gathered_chunk = accelerator.gather(chunk)
+
+        if accelerator.is_main_process:
+            # Calculate proper indices for each process's data
+            for p in range(world_size):
+                if i < gathered_sizes[p].item():
+                    # Calculate how many samples to take from this chunk for this process
+                    process_chunk_size = min(max_chunk_size, gathered_sizes[p].item() - i)
+                    if process_chunk_size > 0:
+                        start_idx = p * max_chunk_size_all.item()
+                        process_chunk = gathered_chunk[start_idx:start_idx + process_chunk_size]
+                        gathered_outputs.append((p * total_samples // world_size + i, process_chunk))
+
+    if accelerator.is_main_process:
+        # Sort by the stored indices and concatenate
+        gathered_outputs.sort(key=lambda x: x[0])
+        final_output = torch.cat([chunk for _, chunk in gathered_outputs], dim=0)
+        return final_output
+    return None
+
+
 def run_test(loader, output_csv=False, stage=None):
     all_outputs = []
 
     for batch in tqdm(loader, total=len(loader)):
-        _batch_seq, _batch_cdd, _input_mask = [b.to(device) for b in batch]
+        _batch_seq, _batch_cdd, _input_mask = [b for b in batch]
         bsz, seq_len, n_feats = _batch_seq.shape
 
         _batch_seq = _batch_seq.permute(0, 2, 1).contiguous()
-        _batch_seq = F.pad(_batch_seq, (0, 512 - seq_len), "constant", 0) # pad sequence since moment is fixed 512 input
+        _batch_seq = F.pad(_batch_seq, (0, 512 - seq_len), "constant", 0)
 
-        if args.use_amp:
-            with torch.cuda.amp.autocast():
-                _pred = model(_batch_seq, _input_mask) # this outputs an ndarray
-        else:
-            _pred = model(_batch_seq, _input_mask)  # this outputs an ndarray
+        with accelerator.autocast():
+            _pred = model(_batch_seq, _input_mask)
 
         _pred = _pred.permute(0, 2, 1).contiguous()
-        pred_next_point = _pred[:, -1:, :].squeeze().cpu() # should be (batch, num_features)
+        pred_next_point = _pred[:, -1:, :].squeeze()
         _pred = _pred[:, :3, :]
         wrong_order = _batch_cdd.detach()
 
-        best_perm_batched = find_best_permutations_batched(_pred, wrong_order) # should be (batch, 3)
-        output_res = torch.cat((best_perm_batched, pred_next_point), dim=1) # should be (batch, 3 + num_features)
+        best_perm_batched = find_best_permutations_batched(_pred, wrong_order)
+        best_perm_batched = best_perm_batched.to(pred_next_point.device)
+        output_res = torch.cat((best_perm_batched, pred_next_point), dim=1)
 
         all_outputs.append(output_res)
 
     if output_csv:
-        # Concatenate all predictions and indices
-        all_outputs = np.vstack([output.numpy() for output in all_outputs])
+        # Complex multiprocessing logic for handling the timeout during gathering
+        # First concatenate on each GPU
+        all_outputs = torch.cat(all_outputs, dim=0)
 
-        df = pd.DataFrame(all_outputs)
-        df.to_csv(args.results_path + f'MOMENT_pl{args.pred_len}_{stage}_predictions.csv', sep = ' ', index=False, header=False)
+        # Get total size for pre-allocation on main process
+        local_size = torch.tensor([all_outputs.shape[0]], device=all_outputs.device)
+        size_list = [torch.zeros_like(local_size) for _ in range(accelerator.num_processes)]
+        torch.distributed.all_gather(size_list, local_size)
+
+        if accelerator.is_main_process:
+            total_size = sum(size.item() for size in size_list)
+            final_output = torch.empty((total_size, all_outputs.shape[1]),
+                                       dtype=all_outputs.dtype,
+                                       device=all_outputs.device)
+
+            # Calculate offsets for each process's data
+            offsets = [0]
+            for size in size_list[:-1]:
+                offsets.append(offsets[-1] + size.item())
+
+            # Fill in the main process's portion
+            final_output[
+            offsets[accelerator.process_index]:offsets[accelerator.process_index] + local_size.item()] = all_outputs
+
+            # Receive from other processes in chunks
+            for i in range(1, accelerator.num_processes):
+                start_idx = offsets[i]
+                size = size_list[i].item()
+                chunk_size = 1000  # Adjust based on memory constraints
+
+                for chunk_start in range(0, size, chunk_size):
+                    chunk_end = min(chunk_start + chunk_size, size)
+                    torch.distributed.recv(
+                        final_output[start_idx + chunk_start:start_idx + chunk_end],
+                        src=i
+                    )
+        else:
+            # Other processes send their data in chunks
+            chunk_size = 1000  # Same as above
+            for chunk_start in range(0, local_size.item(), chunk_size):
+                chunk_end = min(chunk_start + chunk_size, local_size.item())
+                torch.distributed.send(
+                    all_outputs[chunk_start:chunk_end],
+                    dst=0
+                )
+
+        if accelerator.is_main_process:
+            # Convert to numpy and save
+            final_output = final_output.cpu().numpy()
+            df = pd.DataFrame(final_output)
+            df[[0, 1, 2]] = df[[0, 1, 2]].astype(int)
+            df.to_csv(args.results_path + f'predictions_epoch{args.train_epochs}.txt', sep=' ', index=False,
+                      header=False)
 
     print('Test complete.')
 
 
-def create_datetime(row):
-    row = row.astype(int)
-    return datetime(row['year'], row['month'], row['day'], row['hour'], row['minute'])
-
-
 # Forecasting task
-
 model = MOMENTPipeline.from_pretrained(
     f"AutonLab/MOMENT-1-{args.moment_size}",
     model_kwargs={
@@ -219,12 +314,28 @@ model = MOMENTPipeline.from_pretrained(
     },
 )
 model.init()
-model.to(device)
+# model.to(device)
 
 # train_data, train_loader = data_provider_cs702(args, 'train')
 # vali_data, vali_loader = data_provider_cs702(args, 'val')
 train_data, train_loader = data_provider_cs702(args, 'full')
 test_data, test_loader = data_provider_cs702(args, 'test')
+
+scaler = torch.cuda.amp.GradScaler()
+optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+
+# Create a OneCycleLR scheduler
+max_lr = args.learning_rate
+total_steps = len(train_loader)
+scheduler = OneCycleLR(optimizer, max_lr=max_lr, total_steps=total_steps, pct_start=args.pct_start)
+
+model, optimizer, scheduler, train_loader, test_loader, criterion, mae_metric = accelerator.prepare(
+    model, optimizer, scheduler, train_loader, test_loader, criterion, mae_metric
+)
+
+# Gradient clipping value
+max_norm = 5.0
+
 
 # Zero-shot eval only, if specified
 if args.task_name == 'zero-shot':
@@ -237,72 +348,65 @@ if args.task_name == 'zero-shot':
     print('Zero shot forecasting, ending inference...')
     exit()
 
+
+if args.use_finetuned:
+    accelerator.load_state(str(path) + '/checkpoint')
+
+    # ---- Evaluation only ----
+    print(f'[DEBUG]: Fine-tuned eval for horizon length {args.pred_len}...')
+    model.eval()
+    with torch.no_grad():
+        run_test(test_loader, True, 'lp')
+    exit()
+
+
 # ---- Training ----
 print(f'[DEBUG]: Training for horizon length {args.pred_len}...')
-scaler = torch.cuda.amp.GradScaler()
-optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-
-# Create a OneCycleLR scheduler
-max_lr = args.learning_rate
-total_steps = len(train_loader)
-scheduler = OneCycleLR(optimizer, max_lr=max_lr, total_steps=total_steps, pct_start=args.pct_start)
-
-# Gradient clipping value
-max_norm = 5.0
-
 losses = []
 start = time.time()
-for batch in tqdm(train_loader, total=len(train_loader)):
-    batch_seq, batch_cdd, batch_next_point, batch_labels, input_mask = [b.to(device) for b in batch]
 
-    bsz, seq_len, n_feats = batch_seq.shape
-    batch_seq = batch_seq.permute(0, 2, 1).contiguous()
-    batch_seq = F.pad(batch_seq, (0, 512 - seq_len), "constant", 0) # pad sequence since moment is fixed 512 input
+for epoch in range(args.train_epochs):
+    epoch_losses = []
+    for batch in tqdm(train_loader, total=len(train_loader)):
+        batch_seq, batch_cdd, batch_next_point, batch_labels, input_mask = batch
 
-    optimizer.zero_grad(set_to_none=True)
+        bsz, seq_len, n_feats = batch_seq.shape
+        batch_seq = batch_seq.permute(0, 2, 1).contiguous()
+        batch_seq = F.pad(batch_seq, (0, 512 - seq_len), "constant", 0) # pad sequence since moment is fixed 512 input
 
-    # train based on the last 4 points' loss (eval only shows the last point's loss instead)
-    if args.use_amp:
-        with torch.cuda.amp.autocast():
+        optimizer.zero_grad(set_to_none=True)
+
+        with accelerator.autocast():
+            # train based on the last 4 points' loss (eval only shows the last point's loss instead)
             pred = model(batch_seq, input_mask)  # this outputs an ndarray
-
-            pred = pred.permute(0, 2, 1).contiguous() # (batch, pred_len, n_features)
+            pred = pred.permute(0, 2, 1).contiguous()  # (batch, pred_len, n_features)
             true = torch.cat((batch_cdd, batch_next_point.unsqueeze(1)), dim=1)
-
             train_loss = criterion(pred, true)
 
-            # Scales the loss for mixed precision training
-            scaler.scale(train_loss).backward()
-
-            # Clip gradients
-            scaler.unscale_(optimizer)
+        accelerator.backward(train_loss)
+        if accelerator.sync_gradients:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
 
-            scaler.step(optimizer)
-            scaler.update()
-    else:
-        pred = model(batch_seq, input_mask)  # this outputs an ndarray
-
-        pred = pred.permute(0, 2, 1).contiguous()  # (batch, pred_len, n_features)
-        true = torch.cat((batch_cdd, batch_next_point.unsqueeze(1)), dim=1)
-
-        train_loss = criterion(pred, true)
-
-        train_loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
         optimizer.step()
+        scheduler.step()
 
-    losses.append(train_loss.item())
+        epoch_losses.append(train_loss.detach())
+
+    # Gather and average losses from all processes at the end of each epoch
+    gathered_losses = accelerator.gather(torch.stack(epoch_losses))
+    epoch_mean_loss = gathered_losses.mean().item()
+    losses.append(epoch_mean_loss)
+
+    if accelerator.is_main_process:
+        print(f"Epoch {epoch + 1}: Train loss: {epoch_mean_loss:.3f}\n")
 
 elapsed = time.time() - start
 
-losses = np.array(losses)
-average_loss = np.average(losses)
-print(f"Epoch 1: Train loss: {average_loss:.3f}\n")
-print(f'Time elapsed: {elapsed}')
+if accelerator.is_main_process:
+    average_loss = np.mean(losses)
+    print(f'Time elapsed: {elapsed}')
+    print(f"Total train loss: {average_loss:.3f}\n")
 
-# step the learning rate scheduler
-scheduler.step()
 
 # ---- Evaluation ----
 print(f'[DEBUG]: Fine-tuned eval for horizon length {args.pred_len}...')
@@ -310,4 +414,8 @@ model.eval()
 with torch.no_grad():
     run_test(test_loader, True, 'lp')
 
-torch.save(model.state_dict(), str(path) + '/' + 'checkpoint')
+# Save model only on main process
+if accelerator.is_main_process:
+    accelerator.save(model.state_dict(), str(path) + '/' + 'checkpoint')
+# torch.save(model.state_dict(), str(path) + '/' + 'checkpoint')
+

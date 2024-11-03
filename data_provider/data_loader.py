@@ -270,7 +270,8 @@ class CS702TrainDataset(Dataset):
         return len(self.data) // self.seq_len
 
     def __getitem__(self, idx):
-        input_mask = np.ones(self.seq_len - self.candidate_len - 1)
+        input_mask = torch.zeros(512, dtype=torch.bool)
+        input_mask[-self.given_seq_len:] = True
         
         seq = self.data[idx * self.seq_len : idx * self.seq_len + self.given_seq_len]
         cdd = self.data[idx * self.seq_len + self.given_seq_len : (idx + 1) * self.seq_len - 1]  # exclude the last one
@@ -290,11 +291,14 @@ class CS702TestDataset(Dataset):
         self.candidate_len = candidate_len
         self.given_seq_len = seq_len - candidate_len
 
+        # self.data = self.data[:24 * self.seq_len]
+
     def __len__(self):
         return len(self.data) // self.seq_len
 
     def __getitem__(self, idx):
-        input_mask = np.ones(self.seq_len - self.candidate_len)
+        input_mask = torch.zeros(512, dtype=torch.bool)
+        input_mask[-self.given_seq_len:] = True
         
         seq = self.data[idx * self.seq_len : idx * self.seq_len + self.given_seq_len]
         cdd = self.data[idx * self.seq_len + self.given_seq_len : (idx + 1) * self.seq_len]

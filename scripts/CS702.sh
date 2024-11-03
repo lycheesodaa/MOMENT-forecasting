@@ -1,9 +1,9 @@
-comment='MOMENT-Demand'
+comment='MOMENT-702'
 learning_rate=0.001
 gpu_id=1
-moment_size='small'
+moment_size='large'
 
-python run_cs702.py \
+accelerate launch run_cs702.py \
   --task_name lp \
   --root_path ./data/dataset/ \
   --results_path ./results/cs702/ \
@@ -14,7 +14,9 @@ python run_cs702.py \
   --label_len 0 \
   --pred_len 4 \
   --learning_rate $learning_rate \
-  --percent 5 \
-  --batch_size 16 \
+  --percent 100 \
+  --batch_size 6 \
+  --train_epochs 2 \
   --gpu_id $gpu_id \
-  --model_comment $comment | tee results/MOMENT_Demand_${pred_len}.txt
+  --use_finetuned 1 \
+  --model_comment $comment | tee results/MOMENT_702_${pred_len}.txt
