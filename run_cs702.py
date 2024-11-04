@@ -176,7 +176,7 @@ def run_test(loader, output_csv=False, stage=None):
         bsz, seq_len, n_feats = _batch_seq.shape
 
         _batch_seq = _batch_seq.permute(0, 2, 1).contiguous()
-        _batch_seq = F.pad(_batch_seq, (0, 512 - seq_len), "constant", 0) # pad sequence since moment is fixed 512 input
+        _batch_seq = F.pad(_batch_seq, (512 - seq_len, 0), "constant", 0) # pad sequence since moment is fixed 512 input
 
         if args.use_amp:
             with torch.cuda.amp.autocast():
@@ -257,7 +257,7 @@ for batch in tqdm(train_loader, total=len(train_loader)):
 
     bsz, seq_len, n_feats = batch_seq.shape
     batch_seq = batch_seq.permute(0, 2, 1).contiguous()
-    batch_seq = F.pad(batch_seq, (0, 512 - seq_len), "constant", 0) # pad sequence since moment is fixed 512 input
+    batch_seq = F.pad(batch_seq, (512 - seq_len, 0), "constant", 0) # pad sequence since moment is fixed 512 input
 
     optimizer.zero_grad(set_to_none=True)
 
