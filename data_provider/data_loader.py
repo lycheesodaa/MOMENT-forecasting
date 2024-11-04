@@ -291,7 +291,7 @@ class CS702TestDataset(Dataset):
         self.candidate_len = candidate_len
         self.given_seq_len = seq_len - candidate_len
 
-        # self.data = self.data[:24 * self.seq_len]
+        # self.data = self.data[:27 * self.seq_len]
 
     def __len__(self):
         return len(self.data) // self.seq_len
