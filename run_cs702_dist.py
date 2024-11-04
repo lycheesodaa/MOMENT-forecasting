@@ -135,7 +135,9 @@ if not os.path.exists(args.results_path):
     os.mkdir(args.results_path)
     
 
-def find_best_permutations_batched(correct_tensor, wrong_order_tensor):
+def find_best_permutations(correct_tensor, wrong_order_tensor):
+    print('Running permutation check...')
+
     # Ensure tensors are 3D
     assert correct_tensor.dim() == 3 and wrong_order_tensor.dim() == 3, "Input tensors must be 3D"
     assert correct_tensor.shape == wrong_order_tensor.shape, f"Input tensors must have the same shape: {correct_tensor.shape} != {wrong_order_tensor.shape}"
@@ -176,63 +178,14 @@ def find_best_permutations_batched(correct_tensor, wrong_order_tensor):
     return best_permutations_tensor
 
 
-def gather_predictions(all_outputs, max_chunk_size=1000):
-    num_samples = all_outputs.size(0)
-    num_features = all_outputs.size(1)
-    rank = accelerator.process_index
-    world_size = accelerator.num_processes
-
-    # Calculate total size across all processes
-    total_size = torch.tensor([num_samples], device=all_outputs.device)
-    gathered_sizes = [torch.zeros_like(total_size) for _ in range(world_size)]
-    torch.distributed.all_gather(gathered_sizes, total_size)
-    total_samples = sum(size.item() for size in gathered_sizes)
-
-    # Process in chunks
-    gathered_outputs = []
-    for i in range(0, num_samples, max_chunk_size):
-        end_idx = min(i + max_chunk_size, num_samples)
-        chunk = all_outputs[i:end_idx]
-
-        # Pad if necessary to ensure all processes have same size chunk
-        chunk_size = chunk.size(0)
-        max_chunk_size_all = torch.tensor([chunk_size], device=chunk.device)
-        torch.distributed.all_reduce(max_chunk_size_all, op=torch.distributed.ReduceOp.MAX)
-        if chunk_size < max_chunk_size_all.item():
-            padding = torch.zeros((max_chunk_size_all.item() - chunk_size, num_features),
-                                  device=chunk.device)
-            chunk = torch.cat([chunk, padding], dim=0)
-
-        # Gather chunk from all processes
-        gathered_chunk = accelerator.gather(chunk)
-
-        if accelerator.is_main_process:
-            # Calculate proper indices for each process's data
-            for p in range(world_size):
-                if i < gathered_sizes[p].item():
-                    # Calculate how many samples to take from this chunk for this process
-                    process_chunk_size = min(max_chunk_size, gathered_sizes[p].item() - i)
-                    if process_chunk_size > 0:
-                        start_idx = p * max_chunk_size_all.item()
-                        process_chunk = gathered_chunk[start_idx:start_idx + process_chunk_size]
-                        gathered_outputs.append((p * total_samples // world_size + i, process_chunk))
-
-    if accelerator.is_main_process:
-        # Sort by the stored indices and concatenate
-        gathered_outputs.sort(key=lambda x: x[0])
-        final_output = torch.cat([chunk for _, chunk in gathered_outputs], dim=0)
-        return final_output
-    return None
-
 
 def run_test(loader, output_csv=False, stage=None):
     all_outputs = []
-    total_samples = 0  # Keep track of total samples processed
+    all_wrong_order = []
 
     for batch in tqdm(loader, total=len(loader)):
         _batch_seq, _batch_cdd, _input_mask = [b for b in batch]
         bsz, seq_len, n_feats = _batch_seq.shape
-        total_samples += bsz  # Increment sample count
 
         _batch_seq = _batch_seq.permute(0, 2, 1).contiguous()
         _batch_seq = F.pad(_batch_seq, (512 - seq_len, 0), "constant", 0)
@@ -241,71 +194,35 @@ def run_test(loader, output_csv=False, stage=None):
             _pred = model(_batch_seq, _input_mask)
 
         _pred = _pred.permute(0, 2, 1).contiguous()
-        pred_next_point = _pred[:, -1:, :].squeeze()
-        _pred = _pred[:, :3, :]
-        wrong_order = _batch_cdd.detach()
+        gathered_pred = accelerator.gather(_pred).cpu()
+        gathered_cdd = accelerator.gather(_batch_cdd).cpu()
 
-        best_perm_batched = find_best_permutations_batched(_pred, wrong_order)
-        best_perm_batched = best_perm_batched.to(pred_next_point.device)
-        output_res = torch.cat((best_perm_batched, pred_next_point), dim=1)
+        if accelerator.is_main_process:
+            # TODO if last batch, check and remove padding items?
+            all_outputs.append(gathered_pred)
+            all_wrong_order.append(gathered_cdd)
 
-        all_outputs.append(output_res)
+    torch.cuda.empty_cache()
 
     if output_csv:
-        # Complex multiprocessing logic for handling the timeout during gathering
-        # First concatenate on each GPU
-        all_outputs = torch.cat(all_outputs, dim=0)
-
-        # Get total size for pre-allocation on main process
-        local_size = torch.tensor([all_outputs.shape[0]], device=all_outputs.device)
-        size_list = [torch.zeros_like(local_size) for _ in range(accelerator.num_processes)]
-        torch.distributed.all_gather(size_list, local_size)
-
         if accelerator.is_main_process:
-            total_size = sum(size.item() for size in size_list)
-            final_output = torch.empty((total_size, all_outputs.shape[1]),
-                                       dtype=all_outputs.dtype,
-                                       device=all_outputs.device)
+            # Gather predictions from all processes
+            all_outputs = torch.cat(all_outputs, dim=0) # shape should be (5000, 4, 1280) for full test set?
+            all_wrong_order = torch.cat(all_wrong_order, dim=0)
 
-            # Calculate offsets for each process's data
-            offsets = [0]
-            for size in size_list[:-1]:
-                offsets.append(offsets[-1] + size.item())
+            pred_next_point = all_outputs[:, -1:, :].squeeze()
+            pred_order = all_outputs[:, :3, :]
 
-            # Fill in the main process's portion
-            final_output[
-            offsets[accelerator.process_index]:offsets[accelerator.process_index] + local_size.item()] = all_outputs
+            best_perm_batched = find_best_permutations(pred_order, all_wrong_order)
+            output_res = torch.cat((best_perm_batched, pred_next_point), dim=1)
 
-            # Receive from other processes in chunks
-            for i in range(1, accelerator.num_processes):
-                start_idx = offsets[i]
-                size = size_list[i].item()
-                chunk_size = 1000  # Adjust based on memory constraints
-
-                for chunk_start in range(0, size, chunk_size):
-                    chunk_end = min(chunk_start + chunk_size, size)
-                    torch.distributed.recv(
-                        final_output[start_idx + chunk_start:start_idx + chunk_end],
-                        src=i
-                    )
-        else:
-            # Other processes send their data in chunks
-            chunk_size = 1000  # Same as above
-            for chunk_start in range(0, local_size.item(), chunk_size):
-                chunk_end = min(chunk_start + chunk_size, local_size.item())
-                torch.distributed.send(
-                    all_outputs[chunk_start:chunk_end],
-                    dst=0
-                )
-
-        if accelerator.is_main_process:
-            # Convert to numpy and save
-            final_output = final_output.cpu().numpy()
-            df = pd.DataFrame(final_output)
+            output_res = output_res.numpy()
+            df = pd.DataFrame(output_res)
             df[[0, 1, 2]] = df[[0, 1, 2]].astype(int)
             df.to_csv(args.results_path + f'predictions_epoch{args.train_epochs}.txt', sep=' ', index=False,
                       header=False)
 
+    accelerator.wait_for_everyone()
     print('Test complete.')
 
 
