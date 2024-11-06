@@ -6,10 +6,14 @@
 
 The structure of the code references the MOMENT [forecasting tutorial](https://github.com/moment-timeseries-foundation-model/moment/blob/main/tutorials/forecasting.ipynb), and the training/eval code from [Time-Series-Library](https://github.com/thuml/Time-Series-Library/blob/main/tutorial/TimesNet_tutorial.ipynb).
 
-Currently tuned for the Stock and Demand datasets. Add more dataloaders and `run_xx.py` scripts as necessary (though most datasets should follow the current `run.py` workflow, which is to:
-1. pre-evaluate the out-of-the-box MOMENT model,
-2. train the MOMENT model through linear probing, and
-3. evaluate the trained model.
+To run:
+- Install dependencies in `requirements.txt`
+- Change required variables in the `scripts\CS702.sh` script, and run:
+```
+sh scripts\CS702.sh
+```
+
+Currently running linear-probing (as defined in the paper) with MOMENT-large on the dataset for 1 epoch based on MSE loss (last 4 datapoints prediction). In the test dataset, we compute the similarity between the forecasted features (correct order) and the original features (wrong order) for points 11-13, and then permutate accordingly to give us the output. This is then concatenated with the final datapoint prediction (point 14), to form a single row for 1283 datapoints.
 
 ### Note
 The code currently requires a small change in the MOMENT library to function properly. In the `forecast` method of the `MOMENT` class, add a `.forecast` to the return variable, like so:

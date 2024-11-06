@@ -1,7 +1,7 @@
 comment='MOMENT-Demand'
 learning_rate=0.001
-gpu_id=1
-moment_size='small'
+gpu_id=0
+moment_size='large'
 
 python run_cs702.py \
   --task_name lp \
@@ -14,7 +14,7 @@ python run_cs702.py \
   --label_len 0 \
   --pred_len 4 \
   --learning_rate $learning_rate \
-  --percent 5 \
-  --batch_size 16 \
+  --percent 100 \
+  --batch_size 8 \
   --gpu_id $gpu_id \
-  --model_comment $comment | tee results/MOMENT_Demand_${pred_len}.txt
+  --model_comment $comment | tee results/MOMENT_${pred_len}.txt

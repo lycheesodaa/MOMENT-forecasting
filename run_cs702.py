@@ -199,7 +199,8 @@ def run_test(loader, output_csv=False, stage=None):
         all_outputs = np.vstack([output.numpy() for output in all_outputs])
 
         df = pd.DataFrame(all_outputs)
-        df.to_csv(args.results_path + f'MOMENT_pl{args.pred_len}_{stage}_predictions.csv', sep = ' ', index=False, header=False)
+        df[[0, 1, 2]] = df[[0, 1, 2]].astype(int)
+        df.to_csv(args.results_path + f'predictions.txt', sep = ' ', index=False, header=False)
 
     print('Test complete.')
 
@@ -291,6 +292,7 @@ for batch in tqdm(train_loader, total=len(train_loader)):
         train_loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
         optimizer.step()
+        scheduler.step()
 
     losses.append(train_loss.item())
 
@@ -301,8 +303,6 @@ average_loss = np.average(losses)
 print(f"Epoch 1: Train loss: {average_loss:.3f}\n")
 print(f'Time elapsed: {elapsed}')
 
-# step the learning rate scheduler
-scheduler.step()
 
 # ---- Evaluation ----
 print(f'[DEBUG]: Fine-tuned eval for horizon length {args.pred_len}...')
