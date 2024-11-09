@@ -39,7 +39,7 @@ class CS702TrainDataset(Dataset):
 
 
 class CS702TestDataset(Dataset):
-    def __init__(self, file_name="public.npy", folder_path="./dataset", seq_len=13, candidate_len=3,
+    def __init__(self, file_name="private.npy", folder_path="./dataset", seq_len=13, candidate_len=3,
                  flag='train', percent=100):
         super().__init__()
         self.data = np.load(os.path.join(folder_path, file_name)).astype(np.float32)

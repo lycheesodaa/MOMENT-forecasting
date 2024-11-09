@@ -94,10 +94,12 @@ parser.add_argument('--pct_start', type=float, default=0.2, help='pct_start')
 parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)
 parser.add_argument('--llm_layers', type=int, default=6)
 parser.add_argument('--percent', type=int, default=100)
+parser.add_argument('--gradient_accumulation_steps', type=int, default=1, help='number of gradient accumulation steps')
 
 parser.add_argument('--results_path', type=str, default='./results/data/')
 parser.add_argument('--gpu_id', type=int, default=0)
 parser.add_argument('--moment_size', type=str, default='large', choices=['small', 'base', 'large'])
+parser.add_argument('--use_finetuned', type=str)
 
 args = parser.parse_args()
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -238,6 +240,18 @@ if args.task_name == 'zero-shot':
     print('Zero shot forecasting, ending inference...')
     exit()
 
+if args.use_finetuned is not None:
+    model.load_state_dict(torch.load(str(args.use_finetuned) + '/checkpoint'))
+    torch.cuda.empty_cache()
+
+    # ---- Evaluation only ----
+    print(f'[DEBUG]: Fine-tuned eval for horizon length {args.pred_len}...')
+    model.eval()
+    with torch.no_grad():
+        run_test(test_loader, True, 'lp')
+    exit()
+
+
 # ---- Training ----
 print(f'[DEBUG]: Training for horizon length {args.pred_len}...')
 scaler = torch.cuda.amp.GradScaler()
@@ -245,63 +259,77 @@ optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 
 # Create a OneCycleLR scheduler
 max_lr = args.learning_rate
-total_steps = len(train_loader)
+total_steps = len(train_loader) // args.gradient_accumulation_steps
 scheduler = OneCycleLR(optimizer, max_lr=max_lr, total_steps=total_steps, pct_start=args.pct_start)
 
 # Gradient clipping value
 max_norm = 5.0
 
-losses = []
-start = time.time()
-for batch in tqdm(train_loader, total=len(train_loader)):
-    batch_seq, batch_cdd, batch_next_point, batch_labels, input_mask = [b.to(device) for b in batch]
+cur_epoch = 0
+max_epoch = 1
 
-    bsz, seq_len, n_feats = batch_seq.shape
-    batch_seq = batch_seq.permute(0, 2, 1).contiguous()
-    batch_seq = F.pad(batch_seq, (512 - seq_len, 0), "constant", 0) # pad sequence since moment is fixed 512 input
+while cur_epoch < max_epoch:
+    losses = []
+    start = time.time()
 
     optimizer.zero_grad(set_to_none=True)
+    for idx, batch in tqdm(enumerate(train_loader), total=len(train_loader)):
+        batch_seq, batch_cdd, batch_next_point, batch_labels, input_mask = [b.to(device) for b in batch]
 
-    # train based on the last 4 points' loss (eval only shows the last point's loss instead)
-    if args.use_amp:
-        with torch.cuda.amp.autocast():
+        bsz, seq_len, n_feats = batch_seq.shape
+        batch_seq = batch_seq.permute(0, 2, 1).contiguous()
+        batch_seq = F.pad(batch_seq, (512 - seq_len, 0), "constant", 0) # pad sequence since moment is fixed 512 input
+
+        # train based on the last 4 points' loss (eval only shows the last point's loss instead)
+        if args.use_amp:
+            with torch.cuda.amp.autocast():
+                pred = model(batch_seq, input_mask)  # this outputs an ndarray
+                pred = pred.permute(0, 2, 1).contiguous() # (batch, pred_len, n_features)
+                true = torch.cat((batch_cdd, batch_next_point.unsqueeze(1)), dim=1)
+
+                assert true.shape == pred.shape
+
+                train_loss = criterion(pred, true) / args.gradient_accumulation_steps
+
+                # Scales the loss for mixed precision training
+                scaler.scale(train_loss).backward()
+        else:
             pred = model(batch_seq, input_mask)  # this outputs an ndarray
-
-            pred = pred.permute(0, 2, 1).contiguous() # (batch, pred_len, n_features)
+            pred = pred.permute(0, 2, 1).contiguous()  # (batch, pred_len, n_features)
             true = torch.cat((batch_cdd, batch_next_point.unsqueeze(1)), dim=1)
 
-            train_loss = criterion(pred, true)
+            assert true.shape == pred.shape
 
-            # Scales the loss for mixed precision training
-            scaler.scale(train_loss).backward()
+            train_loss = criterion(pred, true) / args.gradient_accumulation_steps
 
-            # Clip gradients
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+            train_loss.backward()
 
-            scaler.step(optimizer)
-            scaler.update()
-    else:
-        pred = model(batch_seq, input_mask)  # this outputs an ndarray
+        losses.append(train_loss.item() * args.gradient_accumulation_steps)
 
-        pred = pred.permute(0, 2, 1).contiguous()  # (batch, pred_len, n_features)
-        true = torch.cat((batch_cdd, batch_next_point.unsqueeze(1)), dim=1)
+        # Update weights if we've accumulated enough gradients
+        if (idx + 1) % args.gradient_accumulation_steps == 0:
+            if args.use_amp:
+                # Clip gradients
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
 
-        train_loss = criterion(pred, true)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+                optimizer.step()
 
-        train_loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
-        optimizer.step()
-        scheduler.step()
+            optimizer.zero_grad(set_to_none=True)
+            scheduler.step()
 
-    losses.append(train_loss.item())
+    elapsed = time.time() - start
 
-elapsed = time.time() - start
+    losses = np.array(losses)
+    average_loss = np.average(losses)
 
-losses = np.array(losses)
-average_loss = np.average(losses)
-print(f"Epoch 1: Train loss: {average_loss:.3f}\n")
-print(f'Time elapsed: {elapsed}')
+    cur_epoch += 1
+    print(f"Linear Probing Epoch {cur_epoch} - Train loss: {average_loss:.3f}\n")
+    print(f'Time elapsed: {elapsed}')
 
 
 # ---- Evaluation ----
