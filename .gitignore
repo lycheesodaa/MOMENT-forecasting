@@ -5,3 +5,5 @@ checkpoints/
 __pycache__/
 figures/
 current_results
+.vscode/
+scripts/old/

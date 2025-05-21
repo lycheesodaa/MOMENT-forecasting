@@ -514,17 +514,18 @@ class Dataset_Carbon_Monthly(Dataset):
 
 class CS702TrainDataset(Dataset):
     def __init__(self, file_name="train.npy", folder_path="./dataset", seq_len=14, candidate_len=3,
-                 flag='train', percent=100):
+                 flag='full', percent=100):
         super().__init__()
         seed = 123
-        train_ratio = 0.8 * (percent // 100)
-        val_ratio = 0.2 * (percent // 100)
+        train_ratio = 0.8
+        val_ratio = 0.2
 
         self.data = np.load(os.path.join(folder_path, file_name)).astype(np.float32)
+        self.data = self.data[:int(len(self.data) * percent // 100)]
 
         if flag == 'train':
             self.data, _ = random_split(self.data, [train_ratio, val_ratio], torch.Generator().manual_seed(seed))
-        else:
+        elif flag == 'val':
             _, self.data = random_split(self.data, [train_ratio, val_ratio], torch.Generator().manual_seed(seed))
             
         self.seq_len = seq_len
@@ -535,7 +536,8 @@ class CS702TrainDataset(Dataset):
         return len(self.data) // self.seq_len
 
     def __getitem__(self, idx):
-        input_mask = np.ones(self.seq_len - self.candidate_len - 1)
+        input_mask = torch.zeros(512, dtype=torch.bool)
+        input_mask[-self.given_seq_len:] = True
         
         seq = self.data[idx * self.seq_len : idx * self.seq_len + self.given_seq_len]
         cdd = self.data[idx * self.seq_len + self.given_seq_len : (idx + 1) * self.seq_len - 1]  # exclude the last one
@@ -555,11 +557,14 @@ class CS702TestDataset(Dataset):
         self.candidate_len = candidate_len
         self.given_seq_len = seq_len - candidate_len
 
+        # self.data = self.data[:27 * self.seq_len]
+
     def __len__(self):
         return len(self.data) // self.seq_len
 
     def __getitem__(self, idx):
-        input_mask = np.ones(self.seq_len - self.candidate_len)
+        input_mask = torch.zeros(512, dtype=torch.bool)
+        input_mask[-self.given_seq_len:] = True
         
         seq = self.data[idx * self.seq_len : idx * self.seq_len + self.given_seq_len]
         cdd = self.data[idx * self.seq_len + self.given_seq_len : (idx + 1) * self.seq_len]
