@@ -1,7 +1,11 @@
+import datetime
+
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import shutil
+import pandas as pd
+import os
 
 from tqdm import tqdm
 
@@ -296,3 +300,63 @@ def calculate_mape(y_true: list, y_pred: list) -> float:
         raise ZeroDivisionError("MAPE is undefined when true values contain zeros")
 
     return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+
+
+def log_into_csv(results_df, args, stage, log_file_name='demand_runs.csv', name=None, pred_len=1):
+    log_file = f'results/{log_file_name}'
+
+    # create sample file with fencepost entry if it doesn't exist
+    if not os.path.exists(log_file):
+        df = pd.DataFrame({
+            'timestamp': datetime.datetime.now(),
+            'name': 'sample',
+            'stage': 'finetuned',
+            'model': 'MOMENT',
+            'feature_type': 'MS',
+            'seq_len': 512,
+            'pred_len': 12,
+            'lr': 0.01,
+            'bsz': 16,
+            'gpu': 1,
+            'score_type': 'mape',
+            'score': 1.23,
+        }, index=[0])
+        df.to_csv(log_file)
+
+    if args is None:
+        assert name is not None, "Please input a run name."
+        curr_run = pd.DataFrame({
+            'timestamp': datetime.datetime.now(),
+            'name': name,
+            'stage': stage,
+            'model': 'MOMENT',
+            'feature_type': 'MS',
+            'seq_len': 512,
+            'pred_len': pred_len,
+            'lr': 0.001,
+            'bsz': 16,
+            'gpu': None,
+            'score_type': 'mape',
+            'score': calculate_mape(results_df['true'], results_df['pred'])
+        }, index=[0])
+    else:
+        curr_run = pd.DataFrame({
+            'timestamp': datetime.datetime.now(),
+            'name': args.des,
+            'stage': stage,
+            'model': args.model_id,
+            'feature_type': args.features,
+            'seq_len': args.seq_len,
+            'pred_len': args.pred_len,
+            'lr': args.learning_rate,
+            'bsz': args.batch_size,
+            'gpu': int(args.gpu_id),
+            'score_type': 'mape',
+            'score': calculate_mape(results_df['true'], results_df['pred'])
+        }, index=[0])
+
+    df = pd.read_csv(log_file, index_col=0)
+    assert len(df.columns) == len(curr_run.columns)
+
+    df = pd.concat([df, curr_run]).reset_index(drop=True)
+    df.to_csv(log_file)

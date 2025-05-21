@@ -1,4 +1,5 @@
 from datetime import timedelta
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -16,20 +17,24 @@ from data_provider.data_factory import data_dict
 
 from utils.tools import MAPELoss, calculate_mse, calculate_mape
 
+data_path = Path('results/data/')
 save_path = 'figures/demand/model_comparison/'
 
-# predlens = [1, 12, 24, 36, 48, 60, 72]
-predlens = [24, 36, 48, 60]
+predlens = [1, 12, 24, 36, 48, 60, 72, 168, 336]
+# predlens = [24, 36, 48, 60]
 # predlens = [1, 12, 72]
 
 batch_size = 16
 using_short_horizon_forecasting = False
-plot_lianlian_tasks = True
+plot_lianlian_tasks = False
 compare_lp_vs_base_loss = False
-value_vars_list = ['moment_zs', 'moment', 'moirai_zs', 'moirai',
+value_vars_list = ['moment_zs', 'moment',
+                   'moirai_zs', 'moirai',
                    # 'lag_llama', 'lag_llama_zs',
-                   'ttm_zs', 'ttm', 'chronos_zs', 'chronos',
+                   'ttm_zs', 'ttm',
+                   # 'chronos_zs', 'chronos',
                    'lstm', 'conv_lstm', 'gru', 'gru_att',
+                   # 'arima',
                    'true', 'forecast']
 vars_name_map = {
     'moment': 'MOMENT',
@@ -47,6 +52,7 @@ vars_name_map = {
     'conv_lstm': 'Conv-LSTM',
     'gru': 'GRU',
     'gru_att': 'GRU-Attention',
+    'arima': 'ARIMA',
     'forecast': 'NEM Forecast'
 }
 
@@ -65,77 +71,89 @@ def halve_if_duplicated(data):
 Add in additional dataframes here and rename pred columns to match the added name in value_vars_list  
 '''
 def load_data(_pred_len):
+    to_exclude = []
+
     # load MOMENT predictions
-    df = pd.read_csv(f'results/data/MOMENT_Demand_pl{_pred_len}_base_predictions.csv', index_col=0)
+    df = pd.read_csv(data_path / f'MOMENT_Demand_pl{_pred_len}_base_predictions.csv', index_col=0)
     if _pred_len > 12 or not using_short_horizon_forecasting:
-        post_lp = pd.read_csv(f'results/data/MOMENT_Demand_pl{_pred_len}_post-lp_predictions.csv', index_col=0)
+        post_lp = pd.read_csv(data_path / f'MOMENT_Demand_pl{_pred_len}_post-lp_predictions.csv', index_col=0)
         df['moment'] = post_lp['pred']
     df.rename(columns={
         'pred': 'moment_zs'
     }, inplace=True)
     df = halve_if_duplicated(df)
 
-    # load MOIRAI predictions into df
-    moirai = pd.read_csv(f'results/data/MOIRAI_pl{_pred_len}_zero_shot.csv')
-    moirai = halve_if_duplicated(moirai)
-    df['moirai_zs'] = moirai['pred_mean']
-    moirai = pd.read_csv(f'results/data/MOIRAI_pl{_pred_len}_finetuned.csv')
-    moirai = halve_if_duplicated(moirai)
-    df['moirai'] = moirai['pred_mean']
+    try:
+        # load MOIRAI predictions into df
+        moirai = pd.read_csv(data_path / f'MOIRAI_pl{_pred_len}_zero_shot.csv')
+        moirai = halve_if_duplicated(moirai)
+        df['moirai_zs'] = moirai['pred_mean']
+        moirai = pd.read_csv(data_path / f'MOIRAI_pl{_pred_len}_finetuned.csv')
+        moirai = halve_if_duplicated(moirai)
+        df['moirai'] = moirai['pred_mean']
+    except Exception as e:
+        print(e)
+        to_exclude.append('moirai')
+        to_exclude.append('moirai_zs')
 
     # load Lag-Llama predictions into df
-    # lag_llama = pd.read_csv(f'results/data/Lag-Llama_pl{_pred_len}_zero_shot.csv')
+    # lag_llama = pd.read_csv(data_path / f'Lag-Llama_pl{_pred_len}_zero_shot.csv')
     # lag_llama = halve_if_duplicated(lag_llama)
     # df['lag_llama_zs'] = lag_llama['pred_mean']
-    # lag_llama = pd.read_csv(f'results/data/Lag-Llama_pl{_pred_len}_finetuned.csv')
+    # lag_llama = pd.read_csv(data_path / f'Lag-Llama_pl{_pred_len}_finetuned.csv')
     # lag_llama = halve_if_duplicated(lag_llama)
     # df['lag_llama'] = lag_llama['pred_mean']
 
     # load LSTM predictions into df
-    lstm = pd.read_csv(f'results/data/LSTM_Demand_pl{_pred_len}_dm200_predictions.csv', index_col=0)
+    lstm = pd.read_csv(data_path / f'LSTM_Demand_pl{_pred_len}_dm200_predictions.csv', index_col=0)
     lstm = halve_if_duplicated(lstm)
     df['lstm'] = lstm['pred']
 
     # load ConvLSTM predictions into df
-    conv_lstm = pd.read_csv(f'results/data/ConvLSTM_Demand_pl{_pred_len}_dm200_predictions.csv')
+    conv_lstm = pd.read_csv(data_path / f'ConvLSTM_Demand_pl{_pred_len}_dm200_predictions.csv')
     conv_lstm = halve_if_duplicated(conv_lstm)
     df['conv_lstm'] = conv_lstm['pred']
 
     # load GRU predictions into df
-    gru = pd.read_csv(f'results/data/GRU_Demand_pl{_pred_len}_dm200_predictions.csv')
+    gru = pd.read_csv(data_path / f'GRU_Demand_pl{_pred_len}_dm200_predictions.csv')
     gru = halve_if_duplicated(gru)
     df['gru'] = gru['pred']
 
     # load GRU_Attention predictions into df
-    gru_att = pd.read_csv(f'results/data/GRUAttention_Demand_pl{_pred_len}_dm200_predictions.csv')
+    gru_att = pd.read_csv(data_path / f'GRUAttention_Demand_pl{_pred_len}_dm200_predictions.csv')
     gru_att = halve_if_duplicated(gru_att)
     df['gru_att'] = gru_att['pred']
 
-    # load Chronos predictions into df
-    if _pred_len <= 60:
-        chronos = pd.read_csv(f'results/data/Chronos_pl{_pred_len}_zero_shot.csv')
-        df['chronos_zs'] = chronos['pred']
-    chronos = pd.read_csv(f'results/data/Chronos_pl{_pred_len}_finetuned.csv')
-    df['chronos'] = chronos['pred']
+    # # load Chronos predictions into df
+    # if _pred_len <= 60:
+    #     chronos = pd.read_csv(data_path / f'Chronos_pl{_pred_len}_zero_shot.csv')
+    #     df['chronos_zs'] = chronos['pred']
+    # chronos = pd.read_csv(data_path / f'Chronos_pl{_pred_len}_finetuned.csv')
+    # df['chronos'] = chronos['pred']
 
-    # load TTMs predictions into df
-    ttm = pd.read_csv(f'results/data/TTMs_pl{_pred_len}_zeroshot.csv')
-    # TTMs has the correct number of windows; not sure why the rest don't -> shorten df to match
-    df = df.iloc[1:len(ttm) + 1].reset_index()
-    df['ttm_zs'] = ttm['actual']
-    # ttm = pd.read_csv(f'results/data/TTMs_pl{_pred_len}_fewshot5.csv')
-    # df['ttm_5shot'] = ttm['actual']
-    ttm = pd.read_csv(f'results/data/TTMs_pl{_pred_len}_fullshot.csv')
-    df['ttm'] = ttm['actual']
+    try:
+        # load TTMs predictions into df
+        ttm = pd.read_csv(data_path / f'TTMs_pl{_pred_len}_zeroshot.csv')
+        # TTMs has the correct number of windows; not sure why the rest don't -> shorten df to match
+        df = df.iloc[_pred_len:len(ttm) + _pred_len].reset_index()
+        df['ttm_zs'] = ttm['actual']
+        # ttm = pd.read_csv(data_path / f'TTMs_pl{_pred_len}_fewshot5.csv')
+        # df['ttm_5shot'] = ttm['actual']
+        ttm = pd.read_csv(data_path / f'TTMs_pl{_pred_len}_fullshot.csv')
+        df['ttm'] = ttm['actual']
+    except Exception as e:
+        print(e)
+        to_exclude.append('ttm')
+        to_exclude.append('ttm_zs')
 
-    return df
+    return df, to_exclude
 
 
 def plot_multiple(df, title, path_to_save):
     columns_to_plot = [col for col in value_vars_list if col != 'true']
 
     # Create a 4x2 grid of subplots
-    fig, axes = plt.subplots(3, 5, figsize=(15, 15), sharex=True, sharey=True)
+    fig, axes = plt.subplots(3, 5, figsize=(20, 15), sharex=True, sharey=True)
     fig.suptitle(title, fontsize=20)
 
     # Flatten the axes array for easy iteration
@@ -160,10 +178,11 @@ def plot_multiple(df, title, path_to_save):
 
 
 for pred_len in tqdm(predlens):
-    df = load_data(pred_len)
+    df, to_exclude = load_data(pred_len)
 
+    curr_vars = [col for col in value_vars_list if col not in to_exclude]
     if pred_len > 60:
-        value_vars_list = [col for col in value_vars_list if col != "chronos_zs"]
+        curr_vars = [col for col in curr_vars if col != "chronos_zs"]
 
     # re-insert the forecast column since the data processing might have meddled with it
     raw_data = pd.read_csv('data/demand_data_all_cleaned.csv')
@@ -172,15 +191,12 @@ for pred_len in tqdm(predlens):
     # df.drop(columns=['nems_forecast'], inplace=True)
     df = pd.merge(df, raw_data_forecast, on='date', how='left')
     if df.isna().any().any():
-        # droplast if the number of missing windows < 20, otherwise there may be an error
         last_valid_index = df.dropna().index[-1]
-        if (len(df) - last_valid_index) // pred_len < 20:
-            df.dropna(inplace=True)
-        else:
-            exit()
+        print(f'Dropped {(len(df) - last_valid_index) // pred_len} windows')
+        df.dropna(inplace=True)
 
     if plot_lianlian_tasks:
-        test = df.melt(id_vars='date', value_vars=value_vars_list, var_name='ts', value_name='demand')
+        test = df.melt(id_vars='date', value_vars=curr_vars, var_name='ts', value_name='demand')
         fig = plt.figure(figsize=(50, 15))
         sns.lineplot(data=test, x='date', y='demand', hue='ts', errorbar='pi')
         plt.title(f'Demand Plot (Multiple iterations, Horizon {pred_len})', fontsize=40)
@@ -249,7 +265,7 @@ for pred_len in tqdm(predlens):
     #
     #     # multiple iters of the second pred_len horizon
     #     multiple = df.query(f"'{min_date}' <= date <= '{max_date}'")
-    #     multiple = multiple.melt(id_vars='date', value_vars=value_vars_list, var_name='ts', value_name='demand')
+    #     multiple = multiple.melt(id_vars='date', value_vars=curr_vars, var_name='ts', value_name='demand')
     #     fig = plt.figure(figsize=(12,8))
     #     sns.lineplot(data=multiple, x='date', y='demand', hue='ts', errorbar='pi') # use 'sd' or 'pi'
     #     plt.title(f'Demand Plot (Multiple iterations, Horizon {pred_len})')
@@ -261,15 +277,15 @@ for pred_len in tqdm(predlens):
     # else:
     #     # replace 'moment_lp_pred' with 'moment_pred' if using short-horizon-forecasting
     #     if using_short_horizon_forecasting:
-    #         value_vars_list = value_vars_list[1:]
-    #         value_vars_list.insert(0, 'moment_pred')
+    #         curr_vars = curr_vars[1:]
+    #         curr_vars.insert(0, 'moment_pred')
     #
     #     # when pred_len <= 12, use split-iters with a fixed window size of 12
     #     df['window'] = df.index // pred_len
     #     min_date = df.iloc[12]['date']
     #     max_date = df.iloc[12 * 2 - 1]['date']
     #     split = df.query(f"'{min_date}' <= date <= '{max_date}'")
-    #     split = split.melt(id_vars=['date', 'window'], value_vars=value_vars_list, var_name='ts', value_name='demand')
+    #     split = split.melt(id_vars=['date', 'window'], value_vars=curr_vars, var_name='ts', value_name='demand')
     #     fig = plt.figure(figsize=(12,8))
     #     sns.lineplot(data=split, x='date', y='demand', hue='ts', markers=True, dashes=False)
     #     plt.title(f'Demand Plot (Multiple iterations, Horizon {pred_len})')
@@ -278,15 +294,15 @@ for pred_len in tqdm(predlens):
     #
     #     cmap = get_cmap('tab10')
     #     custom_lines = []
-    #     for i, val in enumerate(value_vars_list):
+    #     for i, val in enumerate(curr_vars):
     #         custom_lines.append(Line2D([0], [0], color=cmap(i), lw=1))
     #
-    #     plt.legend(custom_lines, value_vars_list)
+    #     plt.legend(custom_lines, curr_vars)
     #     fig.savefig(save_path + f'MOMENT_Demand_pl{pred_len}_predictions_split.png', bbox_inches='tight')
     #     plt.show()
 
     # calculating losses
-    cols_to_process = [col for col in value_vars_list if col != "true"]
+    cols_to_process = [col for col in curr_vars if col != "true"]
 
     if pred_len <= 12 and using_short_horizon_forecasting:
         cols_to_process = [col for col in cols_to_process if col != "moment"]

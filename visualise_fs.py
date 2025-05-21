@@ -20,17 +20,17 @@ save_path = 'figures/demand/feature_comparison/'
 
 # predlens = [96, 192, 356]
 # predlens = [1, 12, 72]
-predlens = [1, 12, 24, 36, 48, 60, 72]
+predlens = [1, 12, 24, 48, 72, 168, 336]
+# predlens = [1, 7, 14, 30, 60, 178, 356]
 
 batch_size = 16
 using_short_horizon_forecasting = False
-value_vars_list = ['moment', 'moment_zs', 'moment9', 'moment_zs9', 'moment5', 'moment_zs5', 'moment0', 'moment_zs0',
-                   'moirai', 'moirai_zs',
-                   # 'moirai9', 'moirai_zs9',
-                   'moirai5',
-                   # 'moirai_zs5',
-                   'moirai0', 'moirai_zs0',
-                   'lstm', 'lstm9', 'lstm5', 'lstm0', 'true']
+value_vars_list = ['lstm', 'lstm9', 'lstm5', 'lstm0',
+                   # 'moment', 'moment_zs', 'moment9', 'moment_zs9', 'moment5', 'moment_zs5', 'moment0', 'moment_zs0',
+                   # 'moirai', 'moirai_zs', 'moirai9', 'moirai_zs9', 'moirai5', 'moirai_zs5', 'moirai0', 'moirai_zs0',
+                   # 'ttms', 'ttms9', 'ttms5', 'ttms0',
+                   # 'gru', 'gru9', 'gru5', 'gru0',
+                   'true']
 vars_name_map = {
     'moment': 'MOMENT',
     'moirai': 'MOIRAI',
@@ -51,6 +51,7 @@ def halve_if_duplicated(data):
     midpoint = len(data) // 2
     if data.iloc[:midpoint].equals(data.iloc[midpoint:].reset_index(drop=True)):
         data = data.iloc[:midpoint]
+        print('halved')
     data['date'] = pd.to_datetime(data['date'])
 
     return data
@@ -60,80 +61,106 @@ def halve_if_duplicated(data):
 Add in additional dataframes here and rename pred columns to match the added name in value_vars_list  
 '''
 def load_data(_pred_len):
-    # load MOMENT predictions
-    df = pd.read_csv(f'results/feature_select_top5/MOMENT_Demand_pl{_pred_len}_base_predictions.csv', index_col=0)
-    df.rename(columns={
-        'pred': 'moment_zs5'
-    }, inplace=True)
-    post_lp = pd.read_csv(f'results/feature_select_top5/MOMENT_Demand_pl{_pred_len}_post-lp_predictions.csv', index_col=0)
-    df['moment5'] = post_lp['pred']
-    df = halve_if_duplicated(df)
-    base = pd.read_csv(f'results/feature_select_top9/MOMENT_Demand_pl{_pred_len}_base_predictions.csv', index_col=0)
-    base = halve_if_duplicated(base)
-    df['moment_zs9'] = base['pred']
-    post_lp = pd.read_csv(f'results/feature_select_top9/MOMENT_Demand_pl{_pred_len}_post-lp_predictions.csv', index_col=0)
-    post_lp = halve_if_duplicated(post_lp)
-    df['moment9'] = post_lp['pred']
-    base = pd.read_csv(f'results/feature_select_top9/MOMENT_Demand_pl{_pred_len}_base_predictions.csv', index_col=0)
-    base = halve_if_duplicated(base)
-    df['moment_zs0'] = base['pred']
-    post_lp = pd.read_csv(f'results/feature_select_top0/MOMENT_Demand_pl{_pred_len}_post-lp_predictions.csv', index_col=0)
-    post_lp = halve_if_duplicated(post_lp)
-    df['moment0'] = post_lp['pred']
-    base = pd.read_csv(f'results/data/MOMENT_Demand_pl{_pred_len}_base_predictions.csv', index_col=0)
-    base = halve_if_duplicated(base)
-    df['moment_zs'] = base['pred']
-    post_lp = pd.read_csv(f'results/data/MOMENT_Demand_pl{_pred_len}_post-lp_predictions.csv', index_col=0)
-    post_lp = halve_if_duplicated(post_lp)
-    df['moment'] = post_lp['pred']
-
-    # load MOIRAI predictions
-    try:
-        moirai = pd.read_csv(f'results/feature_select_top5/MOIRAI_top5_pl{_pred_len}_zero_shot.csv')
-        moirai = halve_if_duplicated(moirai)
-        df['moirai_zs5'] = moirai['pred_mean']
-    except Exception as e:
-        print(e)
-    moirai_ft = pd.read_csv(f'results/feature_select_top5/MOIRAI_top5_pl{_pred_len}_finetuned.csv')
-    moirai_ft = halve_if_duplicated(moirai_ft)
-    df['moirai5'] = moirai_ft['pred_mean']
-    try:
-        moirai = pd.read_csv(f'results/feature_select_top9/MOIRAI_top9_pl{_pred_len}_zero_shot.csv')
-        moirai = halve_if_duplicated(moirai)
-        df['moirai_zs9'] = moirai['pred_mean']
-        moirai_ft = pd.read_csv(f'results/feature_select_top9/MOIRAI_top9_pl{_pred_len}_finetuned.csv')
-        moirai_ft = halve_if_duplicated(moirai_ft)
-        df['moirai9'] = moirai_ft['pred_mean']
-    except Exception as e:
-        print(e)
-    moirai = pd.read_csv(f'results/feature_select_top0/MOIRAI_top0_pl{_pred_len}_zero_shot.csv')
-    moirai = halve_if_duplicated(moirai)
-    df['moirai_zs0'] = moirai['pred_mean']
-    moirai_ft = pd.read_csv(f'results/feature_select_top0/MOIRAI_top0_pl{_pred_len}_finetuned.csv')
-    moirai_ft = halve_if_duplicated(moirai_ft)
-    df['moirai0'] = moirai_ft['pred_mean']
-    moirai = pd.read_csv(f'results/data/MOIRAI_pl{_pred_len}_zero_shot.csv')
-    moirai = halve_if_duplicated(moirai)
-    df['moirai_zs'] = moirai['pred_mean']
-    moirai_ft = pd.read_csv(f'results/data/MOIRAI_pl{_pred_len}_finetuned.csv')
-    moirai_ft = halve_if_duplicated(moirai_ft)
-    df['moirai'] = moirai_ft['pred_mean']
+    to_exclude = []
 
     # load LSTM predictions into df
-    lstm = pd.read_csv(f'results/feature_select_top5/LSTM_Demand_pl{_pred_len}_dm200_predictions.csv', index_col=0)
-    lstm = halve_if_duplicated(lstm)
-    df['lstm5'] = lstm['pred']
-    lstm = pd.read_csv(f'results/feature_select_top9/LSTM_Demand_pl{_pred_len}_dm200_predictions.csv', index_col=0)
-    lstm = halve_if_duplicated(lstm)
+    df = pd.read_csv(f'results/data/feature_select_top5/LSTM_Demand_pl{_pred_len}_dm200_predictions.csv', index_col=0)
+    df.rename(columns={
+        'pred': 'lstm5'
+    }, inplace=True)
+    lstm = pd.read_csv(f'results/data/feature_select_top9/LSTM_Demand_pl{_pred_len}_dm200_predictions.csv', index_col=0)
     df['lstm9'] = lstm['pred']
-    lstm = pd.read_csv(f'results/feature_select_top0/LSTM_Demand_pl{_pred_len}_dm200_predictions.csv', index_col=0)
-    lstm = halve_if_duplicated(lstm)
+    lstm = pd.read_csv(f'results/data/feature_select_top0/LSTM_Demand_pl{_pred_len}_dm200_predictions.csv', index_col=0)
     df['lstm0'] = lstm['pred']
     lstm = pd.read_csv(f'results/data/LSTM_Demand_pl{_pred_len}_dm200_predictions.csv', index_col=0)
-    lstm = halve_if_duplicated(lstm)
     df['lstm'] = lstm['pred']
 
-    return df
+    # # load GRU predictions into df
+    # gru = pd.read_csv(f'results/data/feature_select_top5/GRU_Demand_pl{_pred_len}_dm200_predictions.csv', index_col=0)
+    # gru = halve_if_duplicated(gru)
+    # df['gru5'] = gru['pred']
+    # gru = pd.read_csv(f'results/data/feature_select_top9/GRU_Demand_pl{_pred_len}_dm200_predictions.csv', index_col=0)
+    # gru = halve_if_duplicated(gru)
+    # df['gru9'] = gru['pred']
+    # gru = pd.read_csv(f'results/data/feature_select_top0/GRU_Demand_pl{_pred_len}_dm200_predictions.csv', index_col=0)
+    # gru = halve_if_duplicated(gru)
+    # df['gru0'] = gru['pred']
+    # gru = pd.read_csv(f'results/data/GRU_Demand_pl{_pred_len}_dm200_predictions.csv', index_col=0)
+    # gru = halve_if_duplicated(gru)
+    # df['gru'] = gru['pred']
+
+    # try:
+    #     # load MOMENT predictions
+    #     base = pd.read_csv(f'results/data/feature_select_top5/MOMENT_Demand_pl{_pred_len}_base_predictions.csv', index_col=0)
+    #     df['moment_zs5'] = base['pred']
+    #     post_lp = pd.read_csv(f'results/data/feature_select_top5/MOMENT_Demand_pl{_pred_len}_post-lp_predictions.csv', index_col=0)
+    #     df['moment5'] = post_lp['pred']
+    #     df = halve_if_duplicated(df)
+    #     base = pd.read_csv(f'results/data/feature_select_top9/MOMENT_Demand_pl{_pred_len}_base_predictions.csv', index_col=0)
+    #     base = halve_if_duplicated(base)
+    #     df['moment_zs9'] = base['pred']
+    #     post_lp = pd.read_csv(f'results/data/feature_select_top9/MOMENT_Demand_pl{_pred_len}_post-lp_predictions.csv', index_col=0)
+    #     post_lp = halve_if_duplicated(post_lp)
+    #     df['moment9'] = post_lp['pred']
+    #     base = pd.read_csv(f'results/data/feature_select_top9/MOMENT_Demand_pl{_pred_len}_base_predictions.csv', index_col=0)
+    #     base = halve_if_duplicated(base)
+    #     df['moment_zs0'] = base['pred']
+    #     post_lp = pd.read_csv(f'results/data/feature_select_top0/MOMENT_Demand_pl{_pred_len}_post-lp_predictions.csv', index_col=0)
+    #     post_lp = halve_if_duplicated(post_lp)
+    #     df['moment0'] = post_lp['pred']
+    #     base = pd.read_csv(f'results/data/MOMENT_Demand_pl{_pred_len}_base_predictions.csv', index_col=0)
+    #     base = halve_if_duplicated(base)
+    #     df['moment_zs'] = base['pred']
+    #     post_lp = pd.read_csv(f'results/data/MOMENT_Demand_pl{_pred_len}_post-lp_predictions.csv', index_col=0)
+    #     post_lp = halve_if_duplicated(post_lp)
+    #     df['moment'] = post_lp['pred']
+    # except Exception as e:
+    #     print(e)
+    #
+    # try:
+    #     # load MOIRAI predictions
+    #     moirai = pd.read_csv(f'results/data/feature_select_top5/MOIRAI_top5_pl{_pred_len}_zero_shot.csv')
+    #     moirai = halve_if_duplicated(moirai)
+    #     df['moirai_zs5'] = moirai['pred_mean']
+    #     moirai_ft = pd.read_csv(f'results/data/feature_select_top5/MOIRAI_top5_pl{_pred_len}_finetuned.csv')
+    #     moirai_ft = halve_if_duplicated(moirai_ft)
+    #     df['moirai5'] = moirai_ft['pred_mean']
+    #     moirai = pd.read_csv(f'results/data/feature_select_top9/MOIRAI_top9_pl{_pred_len}_zero_shot.csv')
+    #     moirai = halve_if_duplicated(moirai)
+    #     df['moirai_zs9'] = moirai['pred_mean']
+    #     moirai_ft = pd.read_csv(f'results/data/feature_select_top9/MOIRAI_top9_pl{_pred_len}_finetuned.csv')
+    #     moirai_ft = halve_if_duplicated(moirai_ft)
+    #     df['moirai9'] = moirai_ft['pred_mean']
+    #     moirai = pd.read_csv(f'results/data/feature_select_top0/MOIRAI_top0_pl{_pred_len}_zero_shot.csv')
+    #     moirai = halve_if_duplicated(moirai)
+    #     df['moirai_zs0'] = moirai['pred_mean']
+    #     moirai_ft = pd.read_csv(f'results/data/feature_select_top0/MOIRAI_top0_pl{_pred_len}_finetuned.csv')
+    #     moirai_ft = halve_if_duplicated(moirai_ft)
+    #     df['moirai0'] = moirai_ft['pred_mean']
+    #     moirai = pd.read_csv(f'results/data/MOIRAI_pl{_pred_len}_zero_shot.csv')
+    #     moirai = halve_if_duplicated(moirai)
+    #     df['moirai_zs'] = moirai['pred_mean']
+    #     moirai_ft = pd.read_csv(f'results/data/MOIRAI_pl{_pred_len}_finetuned.csv')
+    #     moirai_ft = halve_if_duplicated(moirai_ft)
+    #     df['moirai'] = moirai_ft['pred_mean']
+    # except Exception as e:
+    #     print(e)
+    #
+    # try:
+    #     # load TTMs into df
+    #     ttms = pd.read_csv(f'results/data/feature_select_top5/TTMs_pl{_pred_len}_fullshot.csv', index_col=0)
+    #     df = df.iloc[_pred_len:len(ttms) + _pred_len].reset_index()
+    #     df['ttms5'] = ttms['actual']
+    #     ttms = pd.read_csv(f'results/data/feature_select_top9/TTMs_pl{_pred_len}_fullshot.csv', index_col=0)
+    #     df['ttms9'] = ttms['actual']
+    #     ttms = pd.read_csv(f'results/data/feature_select_top0/TTMs_pl{_pred_len}_fullshot.csv', index_col=0)
+    #     df['ttms0'] = ttms['actual']
+    #     ttms = pd.read_csv(f'results/data/TTMs_pl{_pred_len}_fullshot.csv', index_col=0)
+    #     df['ttms'] = ttms['actual']
+    # except Exception as e:
+    #     print(e)
+
+    return df, to_exclude
 
 
 def plot_multiple(df, title, path_to_save):
@@ -165,10 +192,16 @@ def plot_multiple(df, title, path_to_save):
 
 
 for pred_len in tqdm(predlens):
-    df = load_data(pred_len)
+    df, to_exclude = load_data(pred_len)
+    curr_vars = [col for col in value_vars_list if col not in to_exclude]
+
+    if df.isna().any().any():
+        last_valid_index = df.dropna().index[-1]
+        print(f'Dropped {(len(df) - last_valid_index) // pred_len} windows')
+        df.dropna(inplace=True)
 
     if plot_lianlian_tasks:
-        test = df.melt(id_vars='date', value_vars=value_vars_list, var_name='ts', value_name='demand')
+        test = df.melt(id_vars='date', value_vars=curr_vars, var_name='ts', value_name='demand')
         fig = plt.figure(figsize=(50, 15))
         sns.lineplot(data=test, x='date', y='demand', hue='ts', errorbar='pi')
         plt.title(f'Demand Plot (Multiple iterations, Horizon {pred_len})', fontsize=40)
@@ -222,13 +255,16 @@ for pred_len in tqdm(predlens):
                           save_path + f'Demand_pl{pred_len}_predictions_month{i + 1}.png')
 
     # calculating losses
-    cols_to_process = [col for col in value_vars_list if col != "true"]
+    cols_to_process = [col for col in curr_vars if col != "true"]
 
     # export average predictions
     avg_data_dict = {'mse': {}, 'mape': {}}
     for col in cols_to_process:
         mse = calculate_mse(df[col].values, df['true'].values)
         mape = calculate_mape(df[col].values, df['true'].values)
+
+        if mse is None or mape is None:
+            raise Exception(f'Error calculating losses for pl{pred_len}, {col}.')
 
         avg_data_dict['mse'][col] = mse
         avg_data_dict['mape'][col] = mape

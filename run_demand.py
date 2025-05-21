@@ -14,6 +14,8 @@ import os
 import time
 import pandas as pd
 
+from utils.tools import calculate_mape, log_into_csv
+
 parser = argparse.ArgumentParser(description='MOMENT')
 
 fix_seed = 2021
@@ -41,11 +43,12 @@ parser.add_argument('--features', type=str, default='M',
                          'MS:multivariate predict univariate')
 parser.add_argument('--target', type=str, default='actual', help='target feature in S or MS task')
 parser.add_argument('--loader', type=str, default='modal', help='dataset type')
-parser.add_argument('--freq', type=str, default='d',
+parser.add_argument('--freq', type=str, default='h',
                     help='freq for time features encoding, '
                          'options:[s:secondly, t:minutely, h:hourly, d:daily, b:business days, w:weekly, m:monthly], '
                          'you can also use more detailed freq like 15min or 3h')
 parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')
+parser.add_argument('--scale', type=bool, default=True, action=argparse.BooleanOptionalAction, help='whether to scale with the data loader')
 
 # forecasting task
 parser.add_argument('--seq_len', type=int, default=96, help='input sequence length')
@@ -94,10 +97,11 @@ parser.add_argument('--llm_layers', type=int, default=6)
 parser.add_argument('--percent', type=int, default=100)
 
 parser.add_argument('--results_path', type=str, default='./results/data/')
+parser.add_argument('--gpu_id', type=str, default=0)
 
 args = parser.parse_args()
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = torch.device('cuda:0')
+device = torch.device(f'cuda:{args.gpu_id}')
 criterion = torch.nn.MSELoss().to(device)
 mae_metric = torch.nn.L1Loss().to(device)
 
@@ -119,12 +123,15 @@ path = os.path.join(args.checkpoints,
 if not os.path.exists(path):
     os.mkdir(path)
 
-def val_or_test(loader, output_csv=False, stage=None):
-    total_loss = []
-    total_mae_loss = []
+if not os.path.exists(args.results_path):
+    os.mkdir(args.results_path)
+
+def val_or_test(loader, output_csv=False, stage='zero-shot'):
     all_preds = []
     all_true = []
     dates = []
+    all_mse = []
+    all_mae = []
 
     for (batch_x, batch_y, batch_x_mark, batch_y_mark, input_mask) in tqdm(loader, total=len(loader)):
         batch_x = batch_x.float().to(device)
@@ -141,11 +148,8 @@ def val_or_test(loader, output_csv=False, stage=None):
         pred = pred[:, target_index, :]
         true = batch_y.detach()[:, target_index, :]
 
-        loss = criterion(pred, true)
-        mae_loss = mae_metric(pred, true)
-
-        total_loss.append(loss.item())
-        total_mae_loss.append(mae_loss.item())
+        all_mse.append(criterion(pred, true).item())
+        all_mae.append(mae_metric(pred, true).item())
 
         if output_csv:
             all_preds.append(pred)
@@ -163,9 +167,13 @@ def val_or_test(loader, output_csv=False, stage=None):
         all_true = all_true.cpu().float().numpy()
         dates = dates.cpu().numpy()
 
-        # inverse the scaling
-        all_preds = vali_data.target_inverse_transform(all_preds.reshape(-1, 1)).reshape(-1)
-        all_true = vali_data.target_inverse_transform(all_true.reshape(-1, 1)).reshape(-1)
+        if args.scale:
+            # inverse the scaling
+            all_preds = vali_data.target_inverse_transform(all_preds.reshape(-1, 1))
+            all_true = vali_data.target_inverse_transform(all_true.reshape(-1, 1))
+
+        all_preds = all_preds.reshape(-1)
+        all_true = all_true.reshape(-1)
 
         dates = pd.DataFrame(dates, columns=['year', 'month', 'day', 'weekday', 'hour', 'minute'], dtype=int)
         df = pd.DataFrame({
@@ -177,15 +185,11 @@ def val_or_test(loader, output_csv=False, stage=None):
         df.drop(columns=['year', 'month', 'day', 'weekday', 'hour', 'minute'], inplace=True)
         df.to_csv(args.results_path + f'MOMENT_Demand_pl{args.pred_len}_{stage}_predictions.csv')
 
-        # # loss calculation is not as accurate here, calculate again from raw data alone
-        # data = pd.DataFrame({
-        #     'mse_loss_scaled': total_loss,
-        #     'mae_loss': total_mae_loss
-        # })
-        # data.to_csv(args.results_path + f'MOMENT_Demand_pl{args.pred_len}_{stage}_losses.csv')
+        # output mape into run log
+        log_into_csv(df, args, stage, log_file_name=f'{args.data}_runs.csv')
 
-    avg_loss = np.average(total_loss)
-    avg_mae_loss = np.average(total_mae_loss)
+    avg_loss = sum(all_mse) / len(all_mse)
+    avg_mae_loss = sum(all_mae) / len(all_mae)
 
     return avg_loss, avg_mae_loss
 
@@ -199,26 +203,14 @@ def create_datetime(row):
 print(f'[DEBUG]: Forecasting for horizon length {args.pred_len}...')
 
 # short horizon performance is not good
-if args.task_name == 'short-term-forecast':
-    model = MOMENTPipeline.from_pretrained(
-        "AutonLab/MOMENT-1-large",
-        model_kwargs={
-            'task_name': 'short-horizon-forecasting',
-            'forecast_horizon': args.pred_len
-        },
-    )
-else:
-    model = MOMENTPipeline.from_pretrained(
-        "AutonLab/MOMENT-1-large",
-        model_kwargs={
-            'task_name': 'long-horizon-forecasting',
-            'forecast_horizon': args.pred_len
-        },
-    )
+model = MOMENTPipeline.from_pretrained(
+    "AutonLab/MOMENT-1-large",
+    model_kwargs={
+        'task_name': 'long-horizon-forecasting',
+        'forecast_horizon': args.pred_len
+    },
+)
 model.init()
-# if torch.cuda.device_count() > 1:
-#     print("Detected", torch.cuda.device_count(), "GPUs. Initialising Multi-GPU configuration...")
-#     model = DataParallel(model)
 model.to(device)
 
 train_data, train_loader = data_provider(args, 'train')
@@ -226,23 +218,15 @@ vali_data, vali_loader = data_provider(args, 'val')
 test_data, test_loader = data_provider(args, 'test')
 
 
-# Pre-evaluation before training
-model.eval()
-with torch.no_grad():
-    # validation
-    # vali_loss, vali_mae_loss = val_or_test(vali_loader)
-    vali_loss = 0
-    vali_mae_loss = 0
-    # test
-    test_loss, test_mae_loss = val_or_test(test_loader, True, 'base')
-model.train()
+# Zero-shot evaluation
+if 'top0' in args.des:
+    print(f'[DEBUG]: Zeroshot eval for horizon length {args.pred_len}...')
+    model.eval()
+    with torch.no_grad():
+        test_loss, test_mae_loss = val_or_test(test_loader, True, 'base')
+    model.train()
 
-print(
-    "Horizon: {0} Pre-eval | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}".format(
-        args.pred_len, vali_loss, vali_mae_loss, test_loss, test_mae_loss))
-
-if args.task_name == 'short_term_forecast':
-    print('Zero shot short horizon forecasting, ending inference...')
+    print("Zeroshot | Test MSE Loss: {0:.7f} Test MAE Loss: {1:.7f}".format(test_loss, test_mae_loss))
     exit()
 
 
@@ -295,6 +279,9 @@ for (batch_x, batch_y, batch_x_mark, batch_y_mark, input_mask) in tqdm(train_loa
 
     losses.append(train_loss.item())
 
+    # step the learning rate scheduler
+    scheduler.step()
+
 elapsed = time.time() - start
 
 losses = np.array(losses)
@@ -302,20 +289,13 @@ average_loss = np.average(losses)
 print(f"Epoch 1: Train loss: {average_loss:.3f}\n")
 print(f'Time elapsed: {elapsed}')
 
-# step the learning rate scheduler
-scheduler.step()
 
 # ---- Evaluation ----
 print(f'[DEBUG]: Fine-tuned eval for horizon length {args.pred_len}...')
 model.eval()
 with torch.no_grad():
-    # validation
-    # vali_loss, vali_mae_loss = val_or_test(vali_loader)
-    # test
     test_loss, test_mae_loss = val_or_test(test_loader, True, 'post-lp')
 
-print(
-    "Horizon: {0} LP-eval | Vali Loss: {1:.7f} Vali MAE Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}".format(
-        args.pred_len, vali_loss, vali_mae_loss, test_loss, test_mae_loss))
+print("LP-eval | Test MSE Loss: {0:.7f} Test MAE Loss: {1:.7f}".format(test_loss, test_mae_loss))
 
-torch.save(model.state_dict(), str(path) + '/' + 'checkpoint')
+# torch.save(model.state_dict(), str(path) + '/' + 'checkpoint')

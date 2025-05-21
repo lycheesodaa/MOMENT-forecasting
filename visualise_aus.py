@@ -19,23 +19,23 @@ from utils.tools import MAPELoss, calculate_mse, calculate_mape
 save_path = 'figures/demand_aus/model_comparison/'
 
 # predlens = [96, 192, 356]
-predlens = [1, 12, 72]
-# predlens = [1, 12, 24, 36, 48, 60, 72]
+# predlens = [1, 12, 72]
+predlens = [1, 12, 24, 36, 48, 60, 72, 168, 336]
 
 batch_size = 16
 using_short_horizon_forecasting = False
 value_vars_list = ['moment_zs', 'moment',
                    'moirai_zs', 'moirai',
-                   'lag_llama', 'lag_llama_zs',
-                   # 'ttm_zs', 'ttm',
-                   'chronos_zs', 'chronos',
+                   # 'lag_llama', 'lag_llama_zs',
+                   'ttm_zs', 'ttm',
+                   # 'chronos_zs', 'chronos',
                    'lstm', 'conv_lstm', 'gru', 'gru_att',
                    'true']
 vars_name_map = {
     'moment': 'MOMENT',
     'moment_zs': 'MOMENT_zeroshot',
-    'moirai': 'MOIRAI',
-    'moirai_zs': 'MOIRAI_zeroshot',
+    'moirai': 'Moirai',
+    'moirai_zs': 'Moirai_zeroshot',
     'lag_llama': 'Lag-Llama',
     'lag_llama_zs': 'Lag-Llama_zeroshot',
     'ttm': 'TTMs',
@@ -68,6 +68,7 @@ def halve_if_duplicated(data):
 Add in additional dataframes here and rename pred columns to match the added name in value_vars_list  
 '''
 def load_data(_pred_len):
+    to_exclude = []
     csv_folder = 'results/data_aus/'
 
     # load MOMENT predictions
@@ -87,27 +88,29 @@ def load_data(_pred_len):
 
     try:
         # load MOIRAI predictions into df
-        moirai = pd.read_csv(csv_folder + f'MOIRAI_AUS_pl{_pred_len}_zero_shot.csv')
+        moirai = pd.read_csv(csv_folder + f'MOIRAI_aus_pl{_pred_len}_zero_shot.csv')
         moirai = halve_if_duplicated(moirai)
         df['moirai_zs_mean'] = moirai['pred_mean']
         df['moirai_zs'] = moirai['pred_median']
-        moirai = pd.read_csv(csv_folder + f'MOIRAI_AUS_pl{_pred_len}_finetuned.csv')
+        moirai = pd.read_csv(csv_folder + f'MOIRAI_aus_pl{_pred_len}_finetuned.csv')
         moirai = halve_if_duplicated(moirai)
         df['moirai_mean'] = moirai['pred_mean']
         df['moirai'] = moirai['pred_median']
     except Exception as e:
         print(e)
+        to_exclude.append('moirai')
+        to_exclude.append('moirai_zs')
 
-    try:
-        # load Lag-Llama predictions into df
-        lag_llama = pd.read_csv(csv_folder + f'Lag-Llama_pl{_pred_len}_zero_shot.csv')
-        lag_llama = halve_if_duplicated(lag_llama)
-        df['lag_llama_zs'] = lag_llama['pred'] # TODO CHANGE
-        lag_llama = pd.read_csv(csv_folder + f'Lag-Llama_pl{_pred_len}_finetuned.csv')
-        lag_llama = halve_if_duplicated(lag_llama)
-        df['lag_llama'] = lag_llama['pred'] # TODO CHANGE
-    except Exception as e:
-        print(e)
+    # try:
+    #     # load Lag-Llama predictions into df
+    #     lag_llama = pd.read_csv(csv_folder + f'Lag-Llama_pl{_pred_len}_zero_shot.csv')
+    #     lag_llama = halve_if_duplicated(lag_llama)
+    #     df['lag_llama_zs'] = lag_llama['pred_mean'] # TODO CHANGE
+    #     lag_llama = pd.read_csv(csv_folder + f'Lag-Llama_pl{_pred_len}_finetuned.csv')
+    #     lag_llama = halve_if_duplicated(lag_llama)
+    #     df['lag_llama'] = lag_llama['pred_mean'] # TODO CHANGE
+    # except Exception as e:
+    #     print(e)
 
     # load ConvLSTM predictions into df
     conv_lstm = pd.read_csv(csv_folder + f'ConvLSTM_Demand_pl{_pred_len}_dm200_predictions.csv')
@@ -124,18 +127,18 @@ def load_data(_pred_len):
     gru_att = halve_if_duplicated(gru_att)
     df['gru_att'] = gru_att['pred']
 
-    # load Chronos predictions into df
-    if _pred_len <= 60:
-        chronos = pd.read_csv(csv_folder + f'Chronos_pl{_pred_len}_zero_shot.csv')
-        df['chronos_zs'] = chronos['pred']
-    chronos = pd.read_csv(csv_folder + f'Chronos_pl{_pred_len}_finetuned.csv')
-    df['chronos'] = chronos['pred']
+    # # load Chronos predictions into df
+    # if _pred_len <= 60:
+    #     chronos = pd.read_csv(csv_folder + f'Chronos_pl{_pred_len}_zero_shot.csv')
+    #     df['chronos_zs'] = chronos['pred']
+    # chronos = pd.read_csv(csv_folder + f'Chronos_pl{_pred_len}_finetuned.csv')
+    # df['chronos'] = chronos['pred']
 
     try:
         # load TTMs predictions into df
         ttm = pd.read_csv(csv_folder + f'TTMs_pl{_pred_len}_zeroshot.csv')
         # TTMs has the correct number of windows; not sure why the rest don't -> shorten df to match
-        df = df.iloc[1:len(ttm) + 1].reset_index()
+        df = df.iloc[_pred_len:len(ttm) + _pred_len].reset_index()
         df['ttm_zs'] = ttm['actual']
         # ttm = pd.read_csv(csv_folder + f'TTMs_pl{_pred_len}_fewshot5.csv')
         # df['ttm_5shot'] = ttm['actual']
@@ -143,8 +146,12 @@ def load_data(_pred_len):
         df['ttm'] = ttm['actual']
     except Exception as e:
         print(e)
+        to_exclude.append('ttm')
+        to_exclude.append('ttm_zs')
 
-    return df
+    # print(df.columns)
+
+    return df, to_exclude
 
 
 def plot_multiple(df, title, path_to_save):
@@ -176,16 +183,23 @@ def plot_multiple(df, title, path_to_save):
 
 
 for pred_len in tqdm(predlens):
-    df = load_data(pred_len)
+    df, to_exclude = load_data(pred_len)
 
     raw_data = pd.read_csv('data/demand_data_all_nsw_numerical.csv')
     raw_data['date'] = pd.to_datetime(raw_data['datetime'])
 
+    curr_vars = [col for col in value_vars_list if col not in to_exclude]
     if pred_len > 60:
-        value_vars_list = [col for col in value_vars_list if col != "chronos_zs"]
+        curr_vars = [col for col in curr_vars if col != "chronos_zs"]
+
+    if df.isna().any().any():
+        # droplast if the number of missing windows < 20, otherwise there may be an error
+        last_valid_index = df.dropna().index[-1]
+        print(f'Dropped {(len(df) - last_valid_index) // pred_len} windows')
+        df.dropna(inplace=True)
 
     if plot_lianlian_tasks:
-        test = df.melt(id_vars='date', value_vars=value_vars_list, var_name='ts', value_name='demand')
+        test = df.melt(id_vars='date', value_vars=curr_vars, var_name='ts', value_name='demand')
         fig = plt.figure(figsize=(50, 15))
         sns.lineplot(data=test, x='date', y='demand', hue='ts', errorbar='pi')
         plt.title(f'Demand Plot (Multiple iterations, Horizon {pred_len})', fontsize=40)
@@ -253,7 +267,7 @@ for pred_len in tqdm(predlens):
     #
     #     # multiple iters of the second pred_len horizon
     #     multiple = df.query(f"'{min_date}' <= date <= '{max_date}'")
-    #     multiple = multiple.melt(id_vars='date', value_vars=value_vars_list, var_name='ts', value_name='demand')
+    #     multiple = multiple.melt(id_vars='date', value_vars=curr_vars, var_name='ts', value_name='demand')
     #     fig = plt.figure(figsize=(12,8))
     #     sns.lineplot(data=multiple, x='date', y='demand', hue='ts', errorbar='pi') # use 'sd' or 'pi'
     #     plt.title(f'Demand Plot (Multiple iterations, Horizon {pred_len})')
@@ -265,15 +279,15 @@ for pred_len in tqdm(predlens):
     # else:
     #     # replace 'moment_lp_pred' with 'moment_pred' if using short-horizon-forecasting
     #     if using_short_horizon_forecasting:
-    #         value_vars_list = value_vars_list[1:]
-    #         value_vars_list.insert(0, 'moment_pred')
+    #         curr_vars = curr_vars[1:]
+    #         curr_vars.insert(0, 'moment_pred')
     #
     #     # when pred_len <= 12, use split-iters with a fixed window size of 12
     #     df['window'] = df.index // pred_len
     #     min_date = df.iloc[12]['date']
     #     max_date = df.iloc[12 * 2 - 1]['date']
     #     split = df.query(f"'{min_date}' <= date <= '{max_date}'")
-    #     split = split.melt(id_vars=['date', 'window'], value_vars=value_vars_list, var_name='ts', value_name='demand')
+    #     split = split.melt(id_vars=['date', 'window'], value_vars=curr_vars, var_name='ts', value_name='demand')
     #     fig = plt.figure(figsize=(12,8))
     #     sns.lineplot(data=split, x='date', y='demand', hue='ts', markers=True, dashes=False)
     #     plt.title(f'Demand Plot (Multiple iterations, Horizon {pred_len})')
@@ -282,15 +296,15 @@ for pred_len in tqdm(predlens):
     #
     #     cmap = get_cmap('tab10')
     #     custom_lines = []
-    #     for i, val in enumerate(value_vars_list):
+    #     for i, val in enumerate(curr_vars):
     #         custom_lines.append(Line2D([0], [0], color=cmap(i), lw=1))
     #
-    #     plt.legend(custom_lines, value_vars_list)
+    #     plt.legend(custom_lines, curr_vars)
     #     fig.savefig(save_path + f'MOMENT_Demand_pl{pred_len}_predictions_split.png', bbox_inches='tight')
     #     plt.show()
 
     # calculating losses
-    cols_to_process = [col for col in value_vars_list if col != "true"]
+    cols_to_process = [col for col in curr_vars if col != "true"]
 
     if pred_len <= 12 and using_short_horizon_forecasting:
         cols_to_process = [col for col in cols_to_process if col != "moment"]
